@@ -30,6 +30,7 @@
   </link>
 
   <!--
+  Physical properties of the liftboom checked according to the Isaac coordinate: (mass, center of mass, inertia) - 12/09/2024 - Joni
   Isaac-koordinaatin mukaan tarkistetut nostopuomin fyysiset ominaisuudet: (massa, massakeskipiste, inertia) - 12.9.2024 - Joni
   -->
   <link name="liftboom">
@@ -61,6 +62,7 @@
   </link>
 
   <!--
+  Physical properties of the boom checked according to the Isaac coordinate: (mass, center of mass, inertia) - 12/09/2024 - Joni
   Isaac-koordinaatin mukaan tarkistetut taittopuomin fyysiset ominaisuudet: (massa, massakeskipiste, inertia) - 12.9.2024 - Joni
   -->
   <link name="tiltboom">
@@ -92,6 +94,7 @@
     </link> 
 
   <!--
+  Physical properties of the scoop checked according to the Isaac coordinate: (mass, center of mass, inertia) - 12/09/2024 - Joni
   Isaac-koordinaatin mukaan tarkistetut taittopuomin fyysiset ominaisuudet: (massa, massakeskipiste, inertia) - 12.9.2024 - Joni
   -->
   <link name="scoop">
@@ -117,7 +120,7 @@
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
           <mesh
-                filename=".\Assets\scoopcollision.stl" />
+                filename=".\Assets\scoopandmount.stl" />
                 <!--
                 Assettejen lokaatio
                 -->
@@ -126,7 +129,8 @@
     </link> 
 
     <!--
-    Revolite_lift kulman raja-arvot, lower "0.1745329252" , uppre "1.6057029118", kulma-arvo radiaaneina.
+    Revolute_lift angle limit values, lower "0.1745329252" , upper "1.6057029118", angle value in radians.
+    Revolute_lift kulman raja-arvot, lower "0.1745329252" , upper "1.6057029118", kulma-arvo radiaaneina.    
     -->
   <joint
     name="revolute_lift"    
@@ -148,7 +152,8 @@
   </joint>
 
   <!--
-  Revolite_tilt kulman raja-arvot, lower "-0.4886921906" , uppre "1.4835298642", kulma-arvo radiaaneina.
+  Revolute_tilt angle limit values, lower "-0.4886921906" , upper "1.4835298642", angle value in radians.
+  Revolute_tilt kulman raja-arvot, lower "-0.4886921906" , upper "1.4835298642", kulma-arvo radiaaneina.
   -->
   <joint
     name="revolute_tilt"
@@ -170,7 +175,8 @@
   </joint>
 
   <!--
-  Revolite_scoop kulman raja-arvot, lower "-0.5235987756" , uppre "1.1344640138", kulma-arvo radiaaneina.
+  Revolute_scoop angle limit values, lower "-0.5235987756" , upper "1.1344640138", angle value in radians.
+  Revolute_scoop kulman raja-arvot, lower "-0.5235987756" , upper "1.1344640138", kulma-arvo radiaaneina.
   -->
   <joint
     name="revolute_scoop"
