@@ -147,8 +147,11 @@
     <limit
       lower="0.1745329252"
       upper="1.6057029118"
-      effort="0"
-      velocity="0" />
+      effort="60"
+      velocity="0.5" />
+    <dynamics
+      damping="0.05"
+      friction="0" />
   </joint>
 
   <!--
@@ -157,7 +160,10 @@
   -->
   <joint
     name="revolute_tilt"
-    type="revolute">
+    type="revolute">  
+    <!--  
+    <safety_controller k_position="100.0" k_velocity="0.5" soft_lower_limit="-0.4886921906" soft_upper_limit="1.4835298642"/>
+    -->    
     <origin
     xyz="0.20564 0 0.420085"
     rpy="0 0 0 " />
@@ -170,8 +176,11 @@
     <limit
       lower="-0.4886921906"
       upper="1.4835298642"
-      effort="0"
-      velocity="0" />
+      effort="30"
+      velocity="0.5"/>
+    <dynamics
+      damping="0.05"
+      friction="0" />
   </joint>
 
   <!--
@@ -193,8 +202,11 @@
     <limit
       lower="-0.5235987756"
       upper="1.1344640138"
-      effort="0"
-      velocity="0" />
+      effort="30"
+      velocity="0.5" />
+    <dynamics
+      damping="0.05"
+      friction="0" />
   </joint>
 
 </robot>
