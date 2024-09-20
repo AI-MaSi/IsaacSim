@@ -1,6 +1,7 @@
 Drop these files to:
 ```plaintext
 IsaacSim/isaac-sim-4.1.0/exts/omni.isaac.examples/omni/isaac/examples/user_examples
+```
 
 Then run the demo from the IsaacSim:
 
