@@ -126,7 +126,7 @@
                 -->
         </geometry>
       </collision>
-    </link> 
+  </link> 
 
     <!--
     Revolute_lift angle limit values, lower "0.1745329252" , upper "1.6057029118", angle value in radians.
