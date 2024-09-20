@@ -9,6 +9,6 @@ Then run the demo from the IsaacSim:
 
 
 *Keep in mind that you need to have the models loaded as well! Script defaults asset folder to:
-"""plaintext
+```plaintext
 userprofile/Documents/GitHub/IsaacSim/IsaacSim Models/
-"""
+```
