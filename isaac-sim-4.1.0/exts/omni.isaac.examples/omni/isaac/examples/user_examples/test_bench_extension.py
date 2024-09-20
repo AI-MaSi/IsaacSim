@@ -12,7 +12,7 @@ class TestBenchExtension(BaseSampleExtension):
             submenu_name="",
             name="Test Bench",
             title="Masi",
-            doc_link="https://docs.omniverse.nvidia.com/isaacsim/latest/core_api_tutorials/tutorial_core_hello_world.html",
+            doc_link="None",
             overview="No idea what is happening",
             file_path=os.path.abspath(__file__),
             sample=TestBench(),
