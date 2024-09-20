@@ -98,7 +98,6 @@
     --> 
   <link name="tiltboom">
 
-    <inertial>
       <inertial>
         <origin xyz="0.06387097 -0.00006030 0.01821805" rpy="0 0 0"/>
         <mass value="0.7769"/>
