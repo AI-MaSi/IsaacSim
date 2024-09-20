@@ -54,7 +54,7 @@
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
         <mesh
-          filename=".\Assets\uppercarriage.stl" />
+          filename="C:\Users\sh24000\Documents\GitHub\IsaacSim\IsaacSim Models\Excavator_Model\Assets\uppercarriage.stl" />
       </geometry>
     </collision>
   </link>
@@ -74,7 +74,7 @@
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
         <mesh
-          filename=".\Assets\liftboom.stl" />
+          filename="C:\Users\sh24000\Documents\GitHub\IsaacSim\IsaacSim Models\Excavator_Model\Assets\liftboom.stl" />
       </geometry>
       <material
         name="Default">
@@ -87,7 +87,7 @@
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
         <mesh
-          filename=".\Assets\liftboom.stl" />
+          filename="C:\Users\sh24000\Documents\GitHub\IsaacSim\IsaacSim Models\Excavator_Model\Assets\liftboom.stl" />
       </geometry>
     </collision>
   </link>
@@ -110,7 +110,7 @@
 
       <geometry>
         <mesh
-          filename=".\Assets\tiltboom.stl" />
+          filename="C:\Users\sh24000\Documents\GitHub\IsaacSim\IsaacSim Models\Excavator_Model\Assets\tiltboom.stl" />
       </geometry>
       <material
         name="Default">
@@ -123,7 +123,7 @@
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
         <mesh
-          filename=".\Assets\tiltboom.stl" />
+          filename="C:\Users\sh24000\Documents\GitHub\IsaacSim\IsaacSim Models\Excavator_Model\Assets\tiltboom.stl" />
       </geometry>
     </collision>
   </link>
@@ -145,7 +145,7 @@
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
         <mesh
-          filename=".\Assets\scoopandmount.stl" />
+          filename="C:\Users\sh24000\Documents\GitHub\IsaacSim\IsaacSim Models\Excavator_Model\Assets\scoopandmount.stl" />
       </geometry>
       <material
         name="Default">
@@ -157,7 +157,7 @@
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
         <mesh
-          filename=".\Assets\scoopandmount.stl" />
+          filename="C:\Users\sh24000\Documents\GitHub\IsaacSim\IsaacSim Models\Excavator_Model\Assets\scoopandmount.stl" />
           <!--
           Assettejen lokaatio
           -->
