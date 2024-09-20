@@ -130,7 +130,8 @@
 
     <!--
     Revolute_lift angle limit values, lower "0.1745329252" , upper "1.6057029118", angle value in radians.
-    Revolute_lift kulman raja-arvot, lower "0.1745329252" , upper "1.6057029118", kulma-arvo radiaaneina.    
+    Revolute_lift kulman raja-arvot, lower "0.1745329252" , upper "1.6057029118", kulma-arvo radiaaneina.
+    Test_bench_velocity_control.urdf needs damping to be higher and stiffness lower, values in isaac sim : Damping 1.0 and Stiffness 0.05    
     -->
   <joint
     name="revolute_lift"    
@@ -150,13 +151,14 @@
       effort="60"
       velocity="0.5" />
     <dynamics
-      damping="0.05"
+      damping="1.0"
       friction="0" />
   </joint>
 
   <!--
   Revolute_tilt angle limit values, lower "-0.4886921906" , upper "1.4835298642", angle value in radians.
   Revolute_tilt kulman raja-arvot, lower "-0.4886921906" , upper "1.4835298642", kulma-arvo radiaaneina.
+  Test_bench_velocity_control.urdf needs damping to be higher and stiffness lower, values in isaac sim : Damping 1.0 and Stiffness 0.05
   -->
   <joint
     name="revolute_tilt"
@@ -179,13 +181,14 @@
       effort="30"
       velocity="0.5"/>
     <dynamics
-      damping="0.05"
+      damping="1.0"
       friction="0" />
   </joint>
 
   <!--
   Revolute_scoop angle limit values, lower "-0.5235987756" , upper "1.1344640138", angle value in radians.
   Revolute_scoop kulman raja-arvot, lower "-0.5235987756" , upper "1.1344640138", kulma-arvo radiaaneina.
+  Test_bench_velocity_control.urdf needs damping to be higher and stiffness lower, values in isaac sim : Damping 1.0 and Stiffness 0.05
   -->
   <joint
     name="revolute_scoop"
@@ -205,7 +208,7 @@
       effort="30"
       velocity="0.5" />
     <dynamics
-      damping="0.05"
+      damping="1.0"
       friction="0" />
   </joint>
 
