@@ -1,0 +1,98 @@
+[core]
+reloadable = true
+order = 0
+
+[package]
+version = "3.0.2"
+category = "Simulation"
+title = "Isaac Sim Samples"
+description = "Sample extensions for Isaac Sim"
+authors = ["NVIDIA"]
+repository = ""
+keywords = ["isaac", "samples", "manipulation"]
+changelog = "docs/CHANGELOG.md"
+readme = "docs/README.md"
+icon = "data/icon.png"
+preview_image = "data/preview.png"
+writeTarget.kit = true
+
+[dependencies]
+"omni.kit.uiapp" = {}
+"omni.physx" = {}
+"omni.isaac.dynamic_control" = {}
+"omni.isaac.ui" = {}
+"omni.isaac.core" = {}
+"omni.isaac.franka" = {}
+"omni.isaac.manipulators" = {}
+"omni.isaac.universal_robots" = {}
+"omni.isaac.motion_generation" = {}
+"omni.graph.action" = {}
+"omni.graph.nodes" = {}
+"omni.graph.core" = {}
+"omni.isaac.quadruped" = {}
+"omni.isaac.wheeled_robots" = {}
+"omni.isaac.cortex" = {}
+"omni.isaac.cortex.sample_behaviors" = {}
+"omni.isaac.nucleus" = {}
+
+[[python.module]]
+name = "omni.isaac.examples.tests"
+
+
+[[python.module]]
+name = "omni.isaac.examples.kaya_gamepad"
+
+[[python.module]]
+name = "omni.isaac.examples.omnigraph_keyboard"
+
+[[python.module]]
+name = "omni.isaac.examples.follow_target"
+
+[[python.module]]
+name = "omni.isaac.examples.path_planning"
+
+[[python.module]]
+name = "omni.isaac.examples.simple_stack"
+
+[[python.module]]
+name = "omni.isaac.examples.bin_filling"
+
+[[python.module]]
+name = "omni.isaac.examples.robo_factory"
+
+[[python.module]]
+name = "omni.isaac.examples.robo_party"
+
+[[python.module]]
+name = "omni.isaac.examples.hello_world"
+
+[[python.module]]
+name = "omni.isaac.examples.replay_follow_target"
+
+[[python.module]]
+name = "omni.isaac.examples.surface_gripper"
+
+[[python.module]]
+name = "omni.isaac.examples.quadruped"
+
+[[python.module]]
+name = "omni.isaac.examples.user_examples"
+
+[[python.module]]
+name = "omni.isaac.examples.test_bench"
+
+[[python.module]]
+name = "omni.isaac.examples.ur10_palletizing"
+
+[[python.module]]
+name = "omni.isaac.examples.franka_cortex"
+
+[[python.module]]
+name = "omni.isaac.examples.humanoid"
+
+[[test]]
+timeout = 1200
+
+stdoutFailPatterns.exclude = [
+    '*[Error] [carb] [Plugin: omni.sensors.nv.lidar.ext.plugin] Dependency: [omni::sensors::lidar::IGenericModelOutputIOFactory v0.1] failed to be resolved.*', # feature not included in Windows
+]
