@@ -6,7 +6,7 @@ IsaacSim/isaac-sim-4.2.0/exts/omni.isaac.examples/omni/isaac/examples/
 
 Then run the demo from the IsaacSim:
 
-![image]()
+![isaac4 2 0 img](https://github.com/user-attachments/assets/2bfbd094-4111-49ad-b276-d80bcd16ed05)
 
 
 *Keep in mind that you need to have the models loaded as well! Script defaults asset folder to:
