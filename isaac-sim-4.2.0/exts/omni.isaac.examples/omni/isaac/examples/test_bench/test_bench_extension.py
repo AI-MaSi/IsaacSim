@@ -1,14 +1,14 @@
 import os
 
 from omni.isaac.examples.base_sample import BaseSampleExtension
-from omni.isaac.examples.user_examples import TestBench
+from omni.isaac.examples.test_bench import TestBench
 
 
 class TestBenchExtension(BaseSampleExtension):
     def on_startup(self, ext_id: str):
         super().on_startup(ext_id)
         super().start_extension(
-            menu_name="",
+            menu_name="Other",
             submenu_name="",
             name="Test Bench",
             title="Masi",
