@@ -82,6 +82,9 @@ name = "omni.isaac.examples.user_examples"
 name = "omni.isaac.examples.test_bench"
 
 [[python.module]]
+name = "omni.isaac.examples.test_bench_control"
+
+[[python.module]]
 name = "omni.isaac.examples.ur10_palletizing"
 
 [[python.module]]
