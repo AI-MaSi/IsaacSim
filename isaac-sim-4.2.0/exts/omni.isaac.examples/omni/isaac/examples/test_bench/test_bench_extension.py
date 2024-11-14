@@ -10,10 +10,10 @@ class TestBenchExtension(BaseSampleExtension):
         super().start_extension(
             menu_name="Other",
             submenu_name="",
-            name="Test Bench",
-            title="Masi",
-            doc_link="None",
-            overview="No idea what is happening",
+            name="Test Bench example",
+            title="Test Bench example",
+            doc_link="",
+            overview="Simple script creation and control example. Mainly placeholder",
             file_path=os.path.abspath(__file__),
             sample=TestBench(),
         )
