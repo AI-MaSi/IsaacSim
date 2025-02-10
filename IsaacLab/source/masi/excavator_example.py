@@ -8,12 +8,6 @@ This script demonstrates how to use the differential inverse kinematics controll
 
 The differential IK controller can be configured in different modes. It uses the Jacobians computed by
 PhysX. This helps perform parallelized computation of the inverse kinematics.
-
-.. code-block:: bash
-
-    # Usage
-    ./isaaclab.sh -p source/standalone/tutorials/05_controllers/ik_control.py
-
 """
 
 """Launch Isaac Sim Simulator first."""
