@@ -6,6 +6,7 @@ Due to file size constrains, I needed to skip large chunk of examples. I guess i
 More to come, very raw system still.
 
 ## Usage
+Drop the helper and the blacklist to the main IsaacLab folder
 
 ```plaintext
 scraper.py --select-list base_blacklist.txt --max-size 1000
