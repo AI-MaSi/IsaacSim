@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import omni.isaac.lab.sim as sim_utils
-from omni.isaac.lab.actuators import ImplicitActuatorCfg
-from omni.isaac.lab.assets import ArticulationCfg
-from omni.isaac.lab.sensors import ImuCfg
+import isaaclab.sim as sim_utils
+from isaaclab.actuators import ImplicitActuatorCfg
+from isaaclab.assets import ArticulationCfg
+from isaaclab.sensors import ImuCfg
 
 ##
 # Configuration
@@ -59,6 +59,7 @@ MASIV0_CFG = ArticulationCfg(
         # lin_vel=(0.0, 0.0, 0.0),             # Optional: Initial linear velocity
         # ang_vel=(0.0, 0.0, 0.0),             # Optional: Initial angular velocity
 
+        # testing (env resets wrong)
         #joint_pos={
         #    "revolute_lift": 0.0,               # radians!
         #    "revolute_tilt": 0.0,
@@ -74,24 +75,25 @@ MASIV0_CFG = ArticulationCfg(
 
             # custom actuator properties
              stiffness={
-                 "revolute_lift": 600, # Nm/rad
-                 "revolute_tilt": 600,
-                 "revolute_scoop": 600,
+                 "revolute_lift": 1000,
+                 "revolute_tilt": 1000,
+                 "revolute_scoop": 1000,
              },
              damping={
-                 "revolute_lift": 1.5, # Nm/(rad/s)
+                 "revolute_lift": 1.5,
                  "revolute_tilt": 1.5,
                  "revolute_scoop": 1.5,
              },
-             effort_limit={
-                 "revolute_lift": 5000.0, # Nm
-                 "revolute_tilt": 5000.0,
-                 "revolute_scoop": 5000.0,
-             },
+            # inf effort to reduce bouncing
+             #effort_limit={
+             #    "revolute_lift": 5000.0,
+             #    "revolute_tilt": 5000.0,
+             #    "revolute_scoop": 5000.0,
+             #},
              velocity_limit={
-                 "revolute_lift": 2000.0, # rad/s
-                 "revolute_tilt": 2000.0,
-                 "revolute_scoop": 2000.0,
+                 "revolute_lift": 0.6,
+                 "revolute_tilt": 0.6,
+                 "revolute_scoop": 0.6,
              },
         ),
     },
