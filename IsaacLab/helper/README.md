@@ -6,7 +6,6 @@ Due to file size constrains, I needed to skip large chunk of examples. I guess i
 More to come.
 
 ## Usage
-Drop the helper and the blacklist to the main IsaacLab folder
 
 Thow scraper and blacklist to the main IsaacLab folder, and run
 
@@ -17,8 +16,7 @@ python scraper_to_txt.py --use-list blacklist_direct_env.txt
 Current blacklist fills around 80% knowledge capacity.
 
 
-## Claudes project prompt
-Could be better:
+## Claudes project prompt (could be better)
 
 Analyze the uploaded documents and extract all available information accurately and comprehensively. 
 Do not generate or infer any new information beyond what is explicitly stated in the documents. 
