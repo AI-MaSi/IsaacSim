@@ -6,6 +6,7 @@ Due to file size constrains, I needed to skip large chunk of examples. I guess i
 More to come.
 
 ## Usage
+Drop the helper and the blacklist to the main IsaacLab folder
 
 Thow scraper and blacklist to the main IsaacLab folder, and run
 
