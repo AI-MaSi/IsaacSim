@@ -1,21 +1,22 @@
 # Helper
-So much to learn, so I scraped some of the example files provided with IsaacLab, and fed them to Claudes (the AI, not sponsored haha) project. Seems to work pretty good. Also scraped the configclasses, so Claude can understand what to use and so on.
+So much to learn, so I scraped some of the example files provided with IsaacLab, and fed them to Claudes (the AI, not sponsored haha) project. Seems to work pretty good.
 
 Due to file size constrains, I needed to skip large chunk of examples. I guess it would be smart to create many Claude-projects that specify to each part of the development. So basically different blacklists for each part of the project
 
-More to come, very raw system still.
+More to come.
 
 ## Usage
 
+Thow scraper and blacklist to the main IsaacLab folder, and run
+
 ```plaintext
-scraper.py --select-list base_blacklist.txt --max-size 1000
+python scraper_to_txt.py --use-list blacklist_direct_env.txt
 ```
 
-selects base_blacklist.txt and sets maximum output file size to 1000KB.
+Current blacklist fills around 80% knowledge capacity.
 
-Base blacklist focuses on directRLenvs and basic environment creation.
 
-## Claudes project instructions
+## Claudes project prompt
 Could be better:
 
 Analyze the uploaded documents and extract all available information accurately and comprehensively. 
