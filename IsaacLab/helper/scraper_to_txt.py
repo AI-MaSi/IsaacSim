@@ -1,6 +1,5 @@
 import os
 import argparse
-import platform
 from pathlib import Path
 
 # ============ COMMON SKIP LISTS ============
@@ -39,11 +38,7 @@ def load_blacklist(filename):
 
 
 def get_max_filename_length():
-    system = platform.system()
-    if system == "Windows":
-        return 255
-    else:
-        return 255  # Safe default for other systems
+    return 255 # you could create a sys check here
 
 
 def check_filename_length(filename, max_length):
@@ -227,7 +222,6 @@ def main():
         blacklisted_folders = load_blacklist(blacklist_file)
 
     print(f"Processing folders: {', '.join(args.folders)}")
-    print(f"Operating System: {platform.system()}")
     print(f"Maximum filename length: {get_max_filename_length()} characters")
     print(f"Using blacklist file: {args.use_list if args.use_list else 'None'}")
     print(f"Blacklisted folders: {', '.join(sorted(blacklisted_folders))}\n")
