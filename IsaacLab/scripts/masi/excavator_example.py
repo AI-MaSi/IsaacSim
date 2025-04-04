@@ -10,7 +10,7 @@ from isaaclab.app import AppLauncher
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Tutorial on using the differential IK controller.")
 parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to spawn.")
-parser.add_argument("--trajectory", type=str, default="circle", choices=["circle", "square", "figure_eight"],
+parser.add_argument("--trajectory", type=str, default="circle", choices=["circle", "square", "figure_eight", "rotate", "rotate2"],
                     help="Type of trajectory to follow.")
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -34,6 +34,7 @@ from isaaclab.markers.config import FRAME_MARKER_CFG
 from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.math import subtract_frame_transforms
+
 
 ##
 # Pre-defined configs
@@ -64,7 +65,7 @@ class ExampleSceneCfg(InteractiveSceneCfg):
 
 
 # Trajectory generation functions
-def create_square_trajectory(center_x, center_z, side_length, y_axis_rotation, num_steps_per_side=50, device="cuda:0"):
+def create_square_trajectory(center_x, center_z, side_length, y_axis_rotation, num_steps_per_side, device="cuda:0"):
     """
     Creates a square trajectory for the excavator end effector.
 
@@ -118,7 +119,7 @@ def create_square_trajectory(center_x, center_z, side_length, y_axis_rotation, n
     return torch.tensor(poses, device=device)
 
 
-def create_circle_trajectory(center_x, center_z, diameter, y_axis_rotation, num_steps=200, device="cuda:0"):
+def create_circle_trajectory(center_x, center_z, diameter, y_axis_rotation, num_steps, device="cuda:0"):
     """
     Creates a circular trajectory for the excavator end effector.
 
@@ -156,7 +157,7 @@ def create_circle_trajectory(center_x, center_z, diameter, y_axis_rotation, num_
     return torch.tensor(poses, device=device)
 
 
-def create_figure_eight_trajectory(center_x, center_z, width, height, y_axis_rotation, num_steps=200, device="cuda:0"):
+def create_figure_eight_trajectory(center_x, center_z, width, height, y_axis_rotation, num_steps, device="cuda:0"):
     """
     Creates a figure-eight trajectory for the excavator end effector.
 
@@ -191,6 +192,110 @@ def create_figure_eight_trajectory(center_x, center_z, width, height, y_axis_rot
     # Convert list of poses to tensor
     return torch.tensor(poses, device=device)
 
+
+def create_rotation_trajectory(center_x, center_z, width, height, frequency, y_axis_rotation,
+                               rotation, num_steps, device="cuda:0"):
+    """
+    Creates a trajectory that follows a sine wave with multiple oscillations along Z with varying rotation.
+
+    Args:
+        center_x (float): X-coordinate of the trajectory center
+        center_z (float): Z-coordinate of the trajectory center
+        width (float): Amplitude of the sine wave in X direction (default: 0.1)
+        height (float): Total height of the trajectory in Z direction (default: 0.3)
+        frequency (float): Number of complete sine waves in the trajectory (default: 3.0)
+        y_axis_rotation (float): Base rotation around the Y-axis in degrees
+        rotation (float): Total rotation range in degrees (y_axis_rotation ± rotation/2)
+        num_steps (int): Total number of steps in the trajectory
+        device (str): Device to create the tensor on
+
+    Returns:
+        torch.Tensor: Tensor of shape [num_steps, 7] containing poses along the path
+    """
+    import torch
+    import numpy as np
+
+    # Create empty list to store all poses
+    poses = []
+
+    # Calculate rotation range
+    half_rotation = rotation / 2.0
+    min_rotation = y_axis_rotation - half_rotation
+    max_rotation = y_axis_rotation + half_rotation
+
+    # Generate trajectory points
+    for step in range(num_steps):
+        # Parameter t from 0 to 2π (for a full cycle)
+        t = 2 * np.pi * step / num_steps
+
+        # First half goes up, second half goes down (mirroring the motion)
+        z_progress = step / num_steps  # Normalized progress (0 to 1)
+
+        # Calculate X position with sine wave
+        x = center_x + width * np.sin(frequency * 2 * np.pi * z_progress)
+
+        # Calculate Z position (linear from bottom to top and back)
+        if step < num_steps / 2:
+            # First half: go up
+            z = center_z + height * (2 * step / num_steps)
+        else:
+            # Second half: go down
+            z = center_z + height * (2 - 2 * step / num_steps)
+
+        # Calculate Y-axis rotation (oscillates between min and max)
+        current_rotation = min_rotation + (max_rotation - min_rotation) * (0.5 + 0.5 * np.sin(t))
+
+        # Create pose using the existing helper function
+        pose = create_pose(x, z, current_rotation)
+        poses.append(pose)
+
+    # Convert list of poses to tensor
+    return torch.tensor(poses, device=device)
+
+
+def create_rotation(center_x, center_z, y_axis_rotation, rotation, num_steps, device="cuda:0"):
+    """
+    Creates a trajectory that keeps the end effector at a fixed position
+    while rotating back and forth around the Y-axis.
+
+    Args:
+        center_x (float): Fixed X-coordinate of the end effector
+        center_z (float): Fixed Z-coordinate of the end effector
+        y_axis_rotation (float): Base rotation around the Y-axis in degrees
+        rotation (float): Total rotation range in degrees (y_axis_rotation ± rotation/2)
+        num_steps (int): Total number of steps in the trajectory
+        device (str): Device to create the tensor on
+
+    Returns:
+        torch.Tensor: Tensor of shape [num_steps, 7] containing poses along the path
+    """
+    import torch
+    import numpy as np
+
+    # Create empty list to store all poses
+    poses = []
+
+    # Calculate rotation range
+    half_rotation = rotation / 2.0
+    min_rotation = y_axis_rotation - half_rotation
+    max_rotation = y_axis_rotation + half_rotation
+
+    # Generate trajectory points
+    for step in range(num_steps):
+        # Use sine function to create smooth back-and-forth rotation
+        # This gives values between -1 and 1, which we scale to our rotation range
+        phase = 2 * np.pi * step / num_steps
+        rotation_factor = np.sin(phase)
+
+        # Calculate current rotation angle
+        current_rotation = y_axis_rotation + rotation_factor * half_rotation
+
+        # Create pose at fixed position with changing rotation
+        pose = create_pose(center_x, center_z, current_rotation)
+        poses.append(pose)
+
+    # Convert list of poses to tensor
+    return torch.tensor(poses, device=device)
 
 def create_pose(x, z, y_axis_rotation):
     """Smoothbrain XYZWXYZ position creator for people like me:
@@ -281,7 +386,7 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
             device=sim.device  # Device to create tensor on
         )
         print(f"Created square trajectory with {len(trajectory)} points")
-    else:  # figure_eight
+    elif args_cli.trajectory == "figure_eight":
         trajectory = create_figure_eight_trajectory(
             center_x=0.60,  # X-coordinate of figure-eight center
             center_z=-0.0,  # Z-coordinate of figure-eight center
@@ -292,7 +397,29 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
             device=sim.device  # Device to create tensor on
         )
         print(f"Created figure-eight trajectory with {len(trajectory)} points")
-
+    elif args_cli.trajectory == "rotate":
+        trajectory = create_rotation_trajectory(
+            center_x=0.50,  # X-coordinate of circle center
+            center_z=-0.07,  # Z-coordinate of circle center
+            width=0.02,  # Width of the trajectory
+            height=0.20,  # Height of the trajectory
+            frequency=5.0,  # Frequency of the sine wave
+            y_axis_rotation=90.0,  # Rotation around Y-axis in degrees
+            rotation=60.0,  # +-/2 rotation around Y-axis in degrees
+            num_steps=300,  # Number of steps for smooth movement
+            device=sim.device  # Device to create tensor on
+        )
+        print(f"Created rotating trajectory with {len(trajectory)} points")
+    else: # Rotate2
+        trajectory = create_rotation(
+            center_x=0.45,  # X-coordinate of circle center
+            center_z=0.0,  # Z-coordinate of circle center
+            y_axis_rotation=100.0,  # Rotation around Y-axis in degrees
+            rotation=90.0,  # +-/2 rotation around Y-axis in degrees
+            num_steps=200,  # Number of steps for smooth movement
+            device=sim.device  # Device to create tensor on
+        )
+        print(f"Created rotating trajectory with {len(trajectory)} points")
     # Create buffer to store actions
     ik_commands = torch.zeros(scene.num_envs, diff_ik_controller.action_dim, device=robot.device)
 

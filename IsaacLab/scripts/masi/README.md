@@ -15,6 +15,10 @@ isaaclab.bat -p scripts/masi/excavator_example.py --trajectory circle
 
 # Run with a figure-eight trajectory
 --trajectory figure_eight
+
+# Run with rotation trajectory
+--trajectory rotate
+--trajectory rotate2
 ```
 
 
