@@ -1,6 +1,6 @@
-# Excavator IK Test Demo
+# Excavator IK Test Demo (WIP)
 
-This is a quick test demo I made for figuring out how to use differential IK control with an excavator arm. It simulates different trajectories that the excavator's end effector follows.
+(WIP) This is a quick test demo I made for figuring out how to use differential IK control with an excavator arm. It simulates different trajectories that the excavator's end effector follows.
 
 ## Running the tests
 
@@ -8,7 +8,7 @@ Make sure Isaac Sim is running first, then try these different trajectories:
 
 ```bash
 # Run with a circular trajectory (default)
-isaaclab.bat -p scripts/masi/excavator_example.py --trajectory circle
+isaaclab.bat -p scripts/masi/model0_example.py --trajectory circle
 
 # Run with a square trajectory
 --trajectory square

@@ -114,10 +114,11 @@ MASIV2_CFG = ArticulationCfg(
         # Hardcoded path to the .usd file!
         usd_path="C:/Users/sh23937/Documents/GitHub/IsaacSim/IsaacSim Models/Excavator_model/model2.usd",
         #usd_path="C:/Users/sh23937/Documents/GitHub/IsaacSim/IsaacSim Models/Excavator_model/model2_mimic.usd",
+        activate_contact_sensors=True,
 
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             # Required properties
-            disable_gravity=False,
+            disable_gravity=True,
             retain_accelerations=False,
             linear_damping=0.0,
             angular_damping=0.0,
@@ -126,7 +127,7 @@ MASIV2_CFG = ArticulationCfg(
             max_depenetration_velocity=5.0,  # Increased from 1.0 to help with collision resolution
 
             # Additional properties from examples
-            enable_gyroscopic_forces=True,
+            enable_gyroscopic_forces=False,
             max_contact_impulse=1e4,  # Maximum contact force allowed (limit impacts)
         ),
 
@@ -148,7 +149,7 @@ MASIV2_CFG = ArticulationCfg(
     ),
 
     init_state=ArticulationCfg.InitialStateCfg(
-        pos=(0.0, 0.0, 0.0),
+        pos=(0.0, 0.0, 0.15),
 
         # initial joint angles in radians
         joint_pos={
@@ -250,7 +251,7 @@ MASIV2_CFG = ArticulationCfg(
                 "revolute_claw_2": 1.4,
             },
             effort_limit={
-                "revolute_claw_1": 500.0,
+                "revolute_claw_1": 505.0,
                 "revolute_claw_2": 500.0,
             },
             friction={
@@ -268,13 +269,10 @@ MASIV2_CFG = ArticulationCfg(
 )
 
 
-# Model2, slew, lift, tilt, scoop, gripper rotator, gripper
-# Mimic joint causing issues atm, but once fixed this should be good
-MASIV2MIMIC_CFG = ArticulationCfg(
+MASIV2_MIMIC_CFG = ArticulationCfg(
     prim_path="{ENV_REGEX_NS}/Robot",
     spawn=sim_utils.UsdFileCfg(
         # Hardcoded path to the .usd file!
-        #usd_path="C:/Users/sh23937/Documents/GitHub/IsaacSim/IsaacSim Models/Excavator_model/model2.usd",
         usd_path="C:/Users/sh23937/Documents/GitHub/IsaacSim/IsaacSim Models/Excavator_model/model2_mimic.usd",
 
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
@@ -285,32 +283,30 @@ MASIV2MIMIC_CFG = ArticulationCfg(
             angular_damping=0.0,
             max_linear_velocity=1000.0,
             max_angular_velocity=1000.0,
-            max_depenetration_velocity=5.0,  # Increased from 1.0 to help with collision resolution
+            max_depenetration_velocity=1.0,  # TODO: test increased value
 
-            # Additional properties from examples
-            enable_gyroscopic_forces=True,
-            max_contact_impulse=1e4,  # Maximum contact force allowed (limit impacts)
+            enable_gyroscopic_forces=False,
+            max_contact_impulse=1e4,
         ),
 
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
-            enabled_self_collisions=False,  # Keep false for efficiency if no self-collisions expected
-            solver_position_iteration_count=8,
-            solver_velocity_iteration_count=0,
-            sleep_threshold=0.005,
+            enabled_self_collisions=False,
+            solver_position_iteration_count=16,
+            solver_velocity_iteration_count=1,
+            sleep_threshold=0.001,
             stabilization_threshold=0.001,
 
         ),
 
 
         collision_props=sim_utils.CollisionPropertiesCfg(
-            #contact_offset=0.002,  # Distance to start collision detection  # default -inf?
-            rest_offset=0.0,  # Rest distance between colliding objects
+
         ),
     copy_from_source=True,
     ),
 
     init_state=ArticulationCfg.InitialStateCfg(
-        pos=(0.0, 0.0, 0.0),
+        pos=(0.0, 0.0, 0.15), # Slightly raised position
 
         # initial joint angles in radians
         joint_pos={
@@ -319,65 +315,55 @@ MASIV2MIMIC_CFG = ArticulationCfg(
             "revolute_tilt": 0.0,
             "revolute_scoop": 0.0,
             "revolute_gripper": 0.0,
-            "revolute_claw": 0.0,
-            "revolute_mimic": 0.0,
+            #"revolute_claw": 0.0,
         },
         joint_vel={".*": 0.0},  # Set all joint velocities to zero initially
     ),
 
-    # joint limits?
 
-
-    soft_joint_pos_limit_factor=0.95,
+    soft_joint_pos_limit_factor=0.99,
 
 
     actuators={
-        # main movements
-
         "main_joints": ImplicitActuatorCfg(
-            joint_names_expr=["revolute_cabin", "revolute_lift", "revolute_tilt", "revolute_scoop", "revolute_gripper"],    # "revolute_claw"
+            joint_names_expr=["revolute_cabin", "revolute_lift", "revolute_tilt", "revolute_scoop", "revolute_gripper"], # "revolute_claw"],
 
             stiffness={
-                "revolute_cabin": 500.0,
-                "revolute_lift": 800.0,
+                "revolute_cabin": 600.0,
+                "revolute_lift": 600.0,
                 "revolute_tilt": 600.0,
-                "revolute_scoop": 500.0,
-                "revolute_gripper": 100.0,
-                #"revolute_claw": 600.0,
+                "revolute_scoop": 600.0,
+                "revolute_gripper": 600.0,
             },
             damping={
-                "revolute_cabin": 5.0,
+                "revolute_cabin": 40.0,
                 "revolute_lift": 40.0,
                 "revolute_tilt": 40.0,
                 "revolute_scoop": 40.0,
-                "revolute_gripper": 25.0,
-                #"revolute_claw": 25.0,
+                "revolute_gripper": 40.0,
             },
 
             velocity_limit={ # in sim deg/s, here rad/s haha
-                "revolute_cabin": 0.7,       # 0.7 = ~40 deg/s
-                "revolute_lift": 0.7,
-                "revolute_tilt": 0.7,
-                "revolute_scoop": 0.7,
-                "revolute_gripper": 1.05,   # 1.05 = ~60 deg/s
-                #"revolute_claw": 1.3,       # 1.3 = ~75 deg/s
+                "revolute_cabin": 1.1,
+                "revolute_lift": 1.1,
+                "revolute_tilt": 1.1,
+                "revolute_scoop": 1.1,
+                "revolute_gripper": 1.5,
             },
             effort_limit={
                 "revolute_cabin": 200.0,
-                "revolute_lift": 400.0,
-                "revolute_tilt": 300.0,
-                "revolute_scoop": 350.0,
-                "revolute_gripper": 200.0,
-                #"revolute_claw": 200.0,
+                "revolute_lift": 1000.0,
+                "revolute_tilt": 1000.0,
+                "revolute_scoop": 1000.0,
+                "revolute_gripper": 1500.0,
             },
 
             friction={
-                "revolute_cabin": 0.1,
-                "revolute_lift": 0.1,
-                "revolute_tilt": 0.1,
-                "revolute_scoop": 0.1,
-                "revolute_gripper": 0.1,
-                #"revolute_claw": 0.1,
+                "revolute_cabin": 0.0,
+                "revolute_lift": 0.0,
+                "revolute_tilt": 0.0,
+                "revolute_scoop": 0.0,
+                "revolute_gripper": 0.0,
             },
 
             armature={
@@ -386,34 +372,37 @@ MASIV2MIMIC_CFG = ArticulationCfg(
                 "revolute_tilt": 0.0,
                 "revolute_scoop": 0.0,
                 "revolute_gripper": 0.0,
-                #"revolute_claw": 1.0,
             },
         ),
+
         "gripper": ImplicitActuatorCfg(
             joint_names_expr=["revolute_claw"],
 
-            stiffness={
+
             stiffness={
                 "revolute_claw": 600.0,
+
             },
             damping={
-                "revolute_claw": 30.0,
+                "revolute_claw": 25.0,
+
             },
             velocity_limit={
-                "revolute_claw": 1.05,
+                "revolute_claw": 1.1,
+
             },
             effort_limit={
-                "revolute_claw": 250.0,
+                "revolute_claw": 75.0,
+
             },
             friction={
-                "revolute_claw": 0.1,
-            },
+                "revolute_claw": 0.0,
 
-            # armature = "shaft inertia".
+            },
             armature={
                 "revolute_claw": 0.0,
+
             },
         ),
     },
 )
-

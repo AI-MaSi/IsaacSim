@@ -1,4 +1,4 @@
-# pos / rot weighting added and small fixes for svd usage
+# weighting added + small usage fix to SVD method
 
 from __future__ import annotations
 
@@ -83,6 +83,7 @@ class DifferentialIKController:
     """
     Operations.
     """
+
 
     def reset(self, env_ids: torch.Tensor = None):
         """Reset the internals.
@@ -202,30 +203,37 @@ class DifferentialIKController:
         method = self.cfg.ik_method
         ik_params = self.cfg.ik_params or {}
 
+        joint_weights = ik_params.get("joint_weights", None)
+        num_joints = jacobian.size(-1)
+        batch_size = jacobian.size(0)
+
+        # Default to uniform weights if none are given
+        if joint_weights is None:
+            joint_weights = [1.0] * num_joints
+
+        W_inv = self._build_W_inv(joint_weights, batch_size)
+
         if method == "pinv":
             # Moore-Penrose pseudo-inverse
             jacobian_pinv = torch.linalg.pinv(jacobian)
             delta_joint_pos = jacobian_pinv @ delta_pose.unsqueeze(-1)
 
+        if method == "svd":
 
-        elif method == "svd":
             min_singular = ik_params.get("min_singular_value", 1e-4)
-            U, S, Vh = torch.linalg.svd(jacobian, full_matrices=False)  # important: reduce U/Vh shape
 
-            # Shapes:
-            # U: [batch, m, k], S: [batch, k], Vh: [batch, k, n] where k = min(m, n)
+            J_weighted = jacobian @ W_inv
 
-            # Invert singular values with thresholding
+            U, S, Vh = torch.linalg.svd(J_weighted, full_matrices=False)
+
             S_inv = torch.where(S > min_singular, 1.0 / S, torch.zeros_like(S))
 
-            # Build S+ as a diagonal matrix
-            S_inv_mat = torch.diag_embed(S_inv)  # shape: [batch, k, k]
+            S_inv_mat = torch.diag_embed(S_inv)
 
-            # Pseudo-inverse: V^T S+ U^T => Vh.T @ S+ @ U.T
             jacobian_pinv = Vh.transpose(-2, -1) @ S_inv_mat @ U.transpose(-2, -1)
 
-            delta_joint_pos = jacobian_pinv @ delta_pose.unsqueeze(-1)
-            delta_joint_pos = delta_joint_pos.squeeze(-1)
+            delta_joint_pos = W_inv @ jacobian_pinv @ delta_pose.unsqueeze(-1)
+
 
 
         elif method == "trans":
@@ -233,25 +241,57 @@ class DifferentialIKController:
             jacobian_T = torch.transpose(jacobian, 1, 2)
             delta_joint_pos = jacobian_T @ delta_pose.unsqueeze(-1)
 
+
+
         elif method == "dls":
-            # Damped Least Squares (Levenberg-Marquardt)
+
             lambda_val = ik_params.get("lambda_val", 0.1)
 
-            # Compute JJ^T + λ²I
-            JJT = jacobian @ torch.transpose(jacobian, 1, 2)
-            I = torch.eye(JJT.shape[-1], device=self._device).unsqueeze(0).repeat(JJT.shape[0], 1, 1)
+            JW_inv = jacobian @ W_inv
+
+            JJT = JW_inv @ jacobian.transpose(1, 2)
+
+            I = torch.eye(JJT.shape[-1], device=self._device).unsqueeze(0).expand(batch_size, -1, -1)
+
             damped_term = JJT + (lambda_val ** 2) * I
 
-            # Solve (JJ^T + λ²I)^(-1) J δx
             try:
+
                 inv_term = torch.linalg.inv(damped_term)
-                delta_joint_pos = torch.transpose(jacobian, 1, 2) @ inv_term @ delta_pose.unsqueeze(-1)
+
+                delta_joint_pos = W_inv @ jacobian.transpose(1, 2) @ inv_term @ delta_pose.unsqueeze(-1)
+
             except torch.linalg.LinAlgError:
-                # Fallback to pseudo-inverse if inversion fails
+
                 jacobian_pinv = torch.linalg.pinv(jacobian)
+
                 delta_joint_pos = jacobian_pinv @ delta_pose.unsqueeze(-1)
+
+
 
         else:
             raise ValueError(f"Unsupported IK method: {method}. Supported methods: 'pinv', 'svd', 'trans', 'dls'")
 
         return delta_joint_pos.squeeze(-1)
+
+    def _build_W_inv(self, joint_weights: list[float], batch_size: int) -> torch.Tensor:
+        """Build inverse weight matrix for joint weighting.
+
+        Args:
+            joint_weights: List of weights for each joint (higher = more preferred)
+            batch_size: Number of environments
+
+        Returns:
+            Inverse weight matrix W^{-1} of shape [batch_size, num_joints, num_joints]
+        """
+        w = torch.tensor(joint_weights, device=self._device)
+
+        # Validation: prevent division by zero
+        w = torch.clamp(w, min=1e-6)  # Ensure all weights are at least 1e-6
+
+        # Optional: normalize weights
+        # w = w / w.mean()
+
+        # Create diagonal matrix with inverse weights
+        W_inv = torch.diag(1.0 / w).unsqueeze(0).expand(batch_size, -1, -1)
+        return W_inv

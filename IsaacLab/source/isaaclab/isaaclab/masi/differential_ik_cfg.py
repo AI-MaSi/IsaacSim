@@ -35,13 +35,14 @@ class DifferentialIKControllerCfg:
     ik_method: Literal["pinv", "svd", "trans", "dls"] = MISSING
     """Method for computing inverse of Jacobian."""
 
-    ik_params: dict[str, float] | None = None
+    ik_params: dict[str, float | list[float]] | None = None
     """Parameters for the inverse-kinematics method.
 
     Common parameters for all methods:
     - "k_val": Scaling of computed delta-joint positions (default: 1.0).
     - "position_weight": Weight for position errors (default: 1.0).
     - "rotation_weight": Weight for rotation errors (default: 0.1).
+    - "joint_weights": List of per-joint weights (e.g., [1.0, 0.5, 0.1, ..., 1.0]). Works with SVD and DLS methods.
 
     Method-specific parameters:
     - SVD ("svd"):
