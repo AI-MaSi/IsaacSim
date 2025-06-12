@@ -18,6 +18,7 @@ parser.add_argument("--pos_noise", type=float, default=0.3, help="Position noise
 parser.add_argument("--rot_noise", type=float, default=0.1, help="Rotation noise for walls (0-1).")
 parser.add_argument("--trajectory_smoothing", type=float, default=0.5, help="Trajectory smoothing factor (0-1).")
 parser.add_argument("--max_spheres", type=int, default=100, help="Maximum number of trajectory spheres to display (for performance).")
+parser.add_argument("--step_size", type=float, default=0.005, help="Step size between waypoints in meters (smaller=more waypoints=slower movement).")
 
 # Append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -75,11 +76,12 @@ class PathPlanningSceneCfg(InteractiveSceneCfg):
 class PathPlanningEnvironment:
     """Main class for path planning with obstacle avoidance."""
 
-    def __init__(self, sim: sim_utils.SimulationContext, scene: InteractiveScene, max_spheres: int = 100):
+    def __init__(self, sim: sim_utils.SimulationContext, scene: InteractiveScene, max_spheres: int = 100, step_size: float = 0.01):
         self.sim = sim
         self.scene = scene
         self.robot = scene["robot"]
         self.max_spheres = max_spheres
+        self.step_size = max(0.001, step_size)  # Minimum step size to prevent infinite loops
 
         # Initialize markers
         self._init_markers()
@@ -102,42 +104,35 @@ class PathPlanningEnvironment:
         else:
             self.ee_jacobi_idx = self.robot_entity_cfg.body_ids[0]
 
-        # Print available bodies for debugging
-        self._print_robot_bodies()
-
         # Storage for obstacles
         self.obstacles: List[RigidObject] = []
         self.obstacle_count = 0
 
-        # Target pose storage
-        self.target_pos = torch.zeros(scene.num_envs, 3, device=self.sim.device)
-        self.target_quat = torch.zeros(scene.num_envs, 4, device=self.sim.device)
-        self.target_quat[:, 0] = 1.0  # Initialize to identity quaternion
+        # Target pose storage (final target)
+        self.final_target_pos = torch.zeros(scene.num_envs, 3, device=self.sim.device)
+        self.final_target_quat = torch.zeros(scene.num_envs, 4, device=self.sim.device)
+        self.final_target_quat[:, 0] = 1.0  # Initialize to identity quaternion
 
-        # Trajectory storage with circular buffer for performance
+        # Current waypoint storage (what we're currently tracking)
+        self.current_waypoint_pos = torch.zeros(scene.num_envs, 3, device=self.sim.device)
+        self.current_waypoint_quat = torch.zeros(scene.num_envs, 4, device=self.sim.device)
+        self.current_waypoint_quat[:, 0] = 1.0  # Initialize to identity quaternion
+
+        # Trajectory storage and control
         self.trajectory_points = deque(maxlen=self.max_spheres)
         self.interpolated_trajectory: Optional[torch.Tensor] = None
         self.trajectory_step = 0
 
-        print(f"[INFO]: Maximum trajectory spheres set to: {self.max_spheres}")
+        print(f"[INFO]: Path planner initialized - Max spheres: {self.max_spheres}, Step size: {self.step_size}m")
 
-    def _print_robot_bodies(self):
-        """Print all available bodies in the robot for debugging."""
-        print("\n[INFO]: Available robot bodies:")
-        print("-" * 40)
-
-        # Get body names from the robot
-        body_names = self.robot.data.body_names
-        for i, name in enumerate(body_names):
-            print(f"  Body {i}: {name}")
-
-        # Also print joint names
-        print("\n[INFO]: Available robot joints:")
-        print("-" * 40)
-        joint_names = self.robot.data.joint_names
-        for i, name in enumerate(joint_names):
-            print(f"  Joint {i}: {name}")
-        print("-" * 40 + "\n")
+    def _print_robot_info(self):
+        """Print robot configuration for debugging."""
+        print("\n[INFO]: Robot Configuration:")
+        print("-" * 30)
+        print(f"  Bodies: {len(self.robot.data.body_names)} total")
+        print(f"  Joints: {len(self.robot.data.joint_names)} total")
+        print(f"  EE Jacobian Index: {self.ee_jacobi_idx}")
+        print("-" * 30 + "\n")
 
     def _init_markers(self):
         """Initialize visualization markers."""
@@ -145,7 +140,11 @@ class PathPlanningEnvironment:
         frame_marker_cfg = FRAME_MARKER_CFG.copy()
         frame_marker_cfg.markers["frame"].scale = (0.05, 0.05, 0.05)
         self.ee_marker = VisualizationMarkers(frame_marker_cfg.replace(prim_path="/Visuals/ee_current"))
-        self.goal_marker = VisualizationMarkers(frame_marker_cfg.replace(prim_path="/Visuals/ee_goal"))
+
+        # Goal marker with different color/size for distinction
+        goal_frame_marker_cfg = FRAME_MARKER_CFG.copy()
+        goal_frame_marker_cfg.markers["frame"].scale = (0.08, 0.08, 0.08)  # Slightly larger
+        self.goal_marker = VisualizationMarkers(goal_frame_marker_cfg.replace(prim_path="/Visuals/ee_goal"))
 
         # Trajectory markers configuration
         # Blue spheres for actual path
@@ -299,35 +298,38 @@ class PathPlanningEnvironment:
         self.clear_trajectory_visualization()
 
         # Convert position to tensor (in robot base frame)
-        self.target_pos[:] = torch.tensor(target_pos, device=self.sim.device)
+        self.final_target_pos[:] = torch.tensor(target_pos, device=self.sim.device)
 
         # Convert Euler angles to quaternion
         roll_rad = torch.tensor([target_rot[0] * np.pi / 180.0], device=self.sim.device)
         pitch_rad = torch.tensor([target_rot[1] * np.pi / 180.0], device=self.sim.device)
         yaw_rad = torch.tensor([target_rot[2] * np.pi / 180.0], device=self.sim.device)
 
-        self.target_quat[:] = quat_from_euler_xyz(roll_rad, pitch_rad, yaw_rad).repeat(self.scene.num_envs, 1)
+        self.final_target_quat[:] = quat_from_euler_xyz(roll_rad, pitch_rad, yaw_rad).repeat(self.scene.num_envs, 1)
 
-        # Convert target to world frame for visualization
+        # Initialize current waypoint to current position
+        ee_pose_w = self.robot.data.body_state_w[:, self.robot_entity_cfg.body_ids[0], 0:7]
         root_pose_w = self.robot.data.root_state_w[:, 0:7]
-        target_pos_w, target_quat_w = combine_frame_transforms(
+
+        current_pos_b, current_quat_b = subtract_frame_transforms(
             root_pose_w[:, 0:3], root_pose_w[:, 3:7],
-            self.target_pos, self.target_quat
+            ee_pose_w[:, 0:3], ee_pose_w[:, 3:7]
         )
 
-        # Visualize target in world frame
-        self.goal_marker.visualize(target_pos_w, target_quat_w)
+        self.current_waypoint_pos[:] = current_pos_b
+        self.current_waypoint_quat[:] = current_quat_b
 
         print(f"Target set to position: {target_pos}, rotation: {target_rot}")
 
-    def interpolate(self, smoothing: float = 0.5):
-        """Create smooth trajectory from current pose to target.
+    def generate_trajectory(self, smoothing: float = 0.5):
+        """Create smooth trajectory from current pose to target using Bezier curves.
+
+        Doesnt really do much atm, but could be helpful with algo
 
         Args:
-            smoothing: Smoothing factor (0-1), where 1 is smoothest
+            smoothing: Curve strength (0=linear, 1=maximum curve)
         """
         smoothing = np.clip(smoothing, 0.0, 1.0)
-        num_steps = int(2 + smoothing * 98) # 2 to 100 steps, change if you want
 
         # Get current EE pose
         ee_pose_w = self.robot.data.body_state_w[:, self.robot_entity_cfg.body_ids[0], 0:7]
@@ -339,26 +341,80 @@ class PathPlanningEnvironment:
             ee_pose_w[:, 0:3], ee_pose_w[:, 3:7]
         )
 
-        # Create interpolated trajectory
+        # Calculate path distance and steps
+        distance = torch.norm(self.final_target_pos - current_pos_b, dim=-1).item()
+        num_steps = max(2, int(np.ceil(distance / self.step_size)))
+
+        # Create Bezier control points
+        start_pos = current_pos_b[0].cpu().numpy()
+        end_pos = self.final_target_pos[0].cpu().numpy()
+
+        if smoothing > 0:
+            # Create control points for cubic Bezier
+            direction = end_pos - start_pos
+            control_offset = distance * smoothing * 0.3  # Control point distance
+
+            # Control points perpendicular to direct path for natural curve
+            perp = np.array([-direction[1], direction[0], 0])
+            if np.linalg.norm(perp) > 1e-6:
+                perp = perp / np.linalg.norm(perp) * control_offset
+            else:
+                perp = np.array([0, 0, control_offset])
+
+            p0 = start_pos
+            p1 = start_pos + direction * 0.25 + perp
+            p2 = end_pos - direction * 0.25 + perp
+            p3 = end_pos
+        else:
+            # Linear interpolation (no curve)
+            p0 = p1 = start_pos
+            p2 = p3 = end_pos
+
+        # Generate trajectory using Bezier curve
         trajectory = []
         for i in range(num_steps):
             t = i / (num_steps - 1)
-            # Smooth interpolation using cosine
-            t_smooth = 0.5 * (1 - np.cos(t * np.pi))
 
-            # Interpolate position
-            pos = current_pos_b * (1 - t_smooth) + self.target_pos * t_smooth
+            # Cubic Bezier formula: B(t) = (1-t)³P₀ + 3(1-t)²tP₁ + 3(1-t)t²P₂ + t³P₃
+            pos = ((1-t)**3 * p0 +
+                   3*(1-t)**2*t * p1 +
+                   3*(1-t)*t**2 * p2 +
+                   t**3 * p3)
 
-            # Interpolate quaternion (SLERP would be better, but this works for small angles)
-            quat = current_quat_b * (1 - t_smooth) + self.target_quat * t_smooth
-            quat = quat / torch.norm(quat, dim=-1, keepdim=True)  # Normalize
+            # Interpolate quaternion linearly (SLERP would be better but more complex)
+            quat = current_quat_b * (1 - t) + self.final_target_quat * t
+            quat = quat / torch.norm(quat, dim=-1, keepdim=True)
 
-            trajectory.append(torch.cat([pos, quat], dim=-1))
+            pos_tensor = torch.tensor(pos, device=self.sim.device, dtype=torch.float32).unsqueeze(0)
+            trajectory.append(torch.cat([pos_tensor, quat], dim=-1))
 
         self.interpolated_trajectory = torch.stack(trajectory)
         self.trajectory_step = 0
 
-        print(f"Created interpolated trajectory with {num_steps} steps")
+        curve_type = "curved" if smoothing > 0 else "linear"
+        print(f"Created {curve_type} trajectory: {distance:.3f}m distance, {num_steps} waypoints, {self.step_size:.3f}m step size")
+
+    def update_current_waypoint(self):
+        """Update the current waypoint based on trajectory progress."""
+        if self.interpolated_trajectory is not None and self.trajectory_step < len(self.interpolated_trajectory):
+            # Get current waypoint from trajectory
+            current_step_pose = self.interpolated_trajectory[self.trajectory_step]
+            self.current_waypoint_pos[:] = current_step_pose[:, :3]
+            self.current_waypoint_quat[:] = current_step_pose[:, 3:7]
+
+            self.trajectory_step += 1
+        else:
+            # If we've reached the end of trajectory, use final target
+            self.current_waypoint_pos[:] = self.final_target_pos
+            self.current_waypoint_quat[:] = self.final_target_quat
+
+        # Convert to world frame and visualize
+        root_pose_w = self.robot.data.root_state_w[:, 0:7]
+        waypoint_pos_w, waypoint_quat_w = combine_frame_transforms(
+            root_pose_w[:, 0:3], root_pose_w[:, 3:7],
+            self.current_waypoint_pos, self.current_waypoint_quat
+        )
+        self.goal_marker.visualize(waypoint_pos_w, waypoint_quat_w)
 
     def visualize_trajectory(self):
         """Visualize the traversed and calculated trajectories with sphere count limit."""
@@ -419,6 +475,9 @@ class PathPlanningEnvironment:
 
     def step(self):
         """Execute one simulation step with IK control."""
+        # Update current waypoint (this moves the goal marker along the trajectory)
+        self.update_current_waypoint()
+
         # Get current state
         jacobian = self.robot.root_physx_view.get_jacobians()[:, self.ee_jacobi_idx, :, self.robot_entity_cfg.joint_ids]
         ee_pose_w = self.robot.data.body_state_w[:, self.robot_entity_cfg.body_ids[0], 0:7]
@@ -426,37 +485,26 @@ class PathPlanningEnvironment:
         joint_pos = self.robot.data.joint_pos[:, self.robot_entity_cfg.joint_ids]
 
         # Transform Jacobian to base frame
-        base_rot = root_pose_w[:, 3:7]
-        base_rot_matrix = matrix_from_quat(quat_inv(base_rot))
+        base_rot_matrix = matrix_from_quat(quat_inv(root_pose_w[:, 3:7]))
         jacobian[:, :3, :] = torch.bmm(base_rot_matrix, jacobian[:, :3, :])
         jacobian[:, 3:, :] = torch.bmm(base_rot_matrix, jacobian[:, 3:, :])
 
-        # Compute frame in root frame
+        # Compute EE pose in base frame
         ee_pos_b, ee_quat_b = subtract_frame_transforms(
             root_pose_w[:, 0:3], root_pose_w[:, 3:7],
             ee_pose_w[:, 0:3], ee_pose_w[:, 3:7]
         )
 
-        # Store current position for trajectory visualization (deque automatically handles overflow)
+        # Store trajectory point
         self.trajectory_points.append(torch.cat([ee_pos_b, ee_quat_b], dim=-1).clone())
 
-        # Get target from interpolated trajectory if available
-        if self.interpolated_trajectory is not None and self.trajectory_step < len(self.interpolated_trajectory):
-            target_pose = self.interpolated_trajectory[self.trajectory_step]
-            target_pos = target_pose[:, :3]
-            target_quat = target_pose[:, 3:7]
-            self.trajectory_step += 1
-        else:
-            target_pos = self.target_pos
-            target_quat = self.target_quat
-
-        # Compute IK command
-        pos_error = target_pos - ee_pos_b
+        # Compute IK command to current waypoint
+        pos_error = self.current_waypoint_pos - ee_pos_b
         rot_error_angle, rot_error_axis = compute_pose_error(
-            ee_pos_b, ee_quat_b, target_pos, target_quat, rot_error_type="axis_angle"
+            ee_pos_b, ee_quat_b, self.current_waypoint_pos, self.current_waypoint_quat, rot_error_type="axis_angle"
         )
 
-        # Limit step size
+        # Limit step size for stability
         max_linear_step = 0.05
         max_angular_step = 0.5
         pos_error_norm = torch.norm(pos_error, dim=-1, keepdim=True)
@@ -464,27 +512,23 @@ class PathPlanningEnvironment:
         rot_error_norm = torch.norm(rot_error_axis, dim=-1, keepdim=True)
         rot_error_axis = rot_error_axis * torch.clamp(max_angular_step / (rot_error_norm + 1e-6), max=1.0)
 
+        # Send command to IK controller
         command = torch.cat([pos_error, rot_error_axis], dim=-1)
         self.diff_ik_controller.set_command(command, ee_pos=ee_pos_b, ee_quat=ee_quat_b)
 
-        # Compute joint commands
+        # Compute and apply joint commands
         joint_pos_des = self.diff_ik_controller.compute(ee_pos_b, ee_quat_b, jacobian, joint_pos)
-
-        # Apply actions
         self.robot.set_joint_position_target(joint_pos_des, joint_ids=self.robot_entity_cfg.joint_ids)
         self.scene.write_data_to_sim()
 
-        # Visualize current EE position (in world frame)
+        # Visualize current EE position
         self.ee_marker.visualize(ee_pose_w[:, 0:3], ee_pose_w[:, 3:7])
-
-        # Visualize trajectories
-        self.visualize_trajectory()
 
 
 def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
     """Main simulation loop."""
-    # Create environment with max spheres limit
-    env = PathPlanningEnvironment(sim, scene, max_spheres=args_cli.max_spheres)
+    # Create environment with configurable parameters
+    env = PathPlanningEnvironment(sim, scene, max_spheres=args_cli.max_spheres, step_size=args_cli.step_size)
 
     # Initialize robot
     joint_pos = env.robot.data.default_joint_pos.clone()
@@ -497,6 +541,9 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
     # Reset controller
     env.diff_ik_controller.reset()
 
+    # Print robot info for debugging
+    env._print_robot_info()
+
     # Spawn obstacles
     env.spawn_walls(
         num_walls=args_cli.num_walls,
@@ -505,34 +552,29 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
         rot_noise=args_cli.rot_noise
     )
 
-    # Set initial target
+    # Set initial target and create trajectory
     env.set_target(
         target_pos=(0.5, 0.0, 0.1),
         target_rot=(0.0, 0.0, 90.0)
     )
-
-    # Create interpolated trajectory
-    env.interpolate(smoothing=args_cli.trajectory_smoothing)
+    env.generate_trajectory(smoothing=args_cli.trajectory_smoothing)
 
     # Simulation loop
     count = 0
-    visualization_freq = max(1, int(100 / max(1, int(2 + args_cli.trajectory_smoothing * 98))))
+    trajectory_viz_freq = 10  # Update trajectory visualization every N steps
 
     while simulation_app.is_running():
-        # Update simulation
         env.step()
         sim.step()
         scene.update(sim.get_physics_dt())
-
         count += 1
 
-        # Update trajectory visualization at appropriate frequency
-        if count % visualization_freq == 0:
+        # Update trajectory visualization periodically
+        if count % trajectory_viz_freq == 0:
             env.visualize_trajectory()
 
-        # Example: Set new target every 500 steps
-        if count % 500 == 0:
-            # Random target for demonstration
+        # Set new random target every 350 steps
+        if count % 350 == 0:
             new_target_pos = (
                 0.3 + 0.3 * np.random.rand(),
                 -0.2 + 0.4 * np.random.rand(),
@@ -541,8 +583,8 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
             new_target_rot = (0.0, 0.0, -90.0 + 180.0 * np.random.rand())
 
             env.set_target(new_target_pos, new_target_rot)
-            env.interpolate(smoothing=0.5)
-            print(f"[Step {count}] New target set")
+            env.generate_trajectory(smoothing=args_cli.trajectory_smoothing)
+            print(f"[Step {count}] New target: pos={new_target_pos}, rot={new_target_rot}")
 
 
 def main():
