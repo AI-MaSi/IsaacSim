@@ -1,0 +1,121 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 820">
+  <defs>
+    <style>
+      .module-box { fill: #e8f4f8; stroke: #2c5f7d; stroke-width: 2; }
+      .decision-box { fill: #fff4e6; stroke: #d97706; stroke-width: 2; }
+      .output-box { fill: #dcfce7; stroke: #16a34a; stroke-width: 2; }
+      .flow-arrow { fill: none; stroke: #2c5f7d; stroke-width: 2; marker-end: url(#arrowhead); }
+      .title-text { font-family: Arial, sans-serif; font-size: 18px; font-weight: bold; fill: #1e293b; }
+      .label-text { font-family: Arial, sans-serif; font-size: 14px; fill: #1e293b; }
+      .code-text { font-family: 'Courier New', monospace; font-size: 12px; fill: #475569; }
+      .small-text { font-family: Arial, sans-serif; font-size: 11px; fill: #64748b; }
+      .condition-text { font-family: Arial, sans-serif; font-size: 12px; fill: #b45309; font-style: italic; }
+    </style>
+
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#2c5f7d" />
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="600" y="30" class="title-text" text-anchor="middle">Path Planning &amp; Normalization Flow</text>
+  <text x="600" y="50" class="small-text" text-anchor="middle">Input: Config + Obstacles + Start/Goal  →  Output: Normalized trajectory</text>
+
+  <!-- Stage 1: High-level Inputs (config + environment) -->
+  <rect x="80" y="80" width="460" height="90" class="module-box" rx="5"/>
+  <text x="310" y="105" class="label-text" text-anchor="middle" font-weight="bold">1. High-level Inputs</text>
+  <text x="95" y="125" class="code-text">• PathExecutionConfig (dt, speed_mps, max_points, ...)</text>
+  <text x="95" y="140" class="code-text">• EnvironmentConfig (point A/B, wall pose, ...)</text>
+  <text x="95" y="155" class="code-text">• Algorithm choice: a_star / rrt / rrt_star / prm / a_star_plane</text>
+
+  <!-- Stage 1b: Runtime state introspection (EE + root pose) -->
+  <rect x="660" y="80" width="460" height="90" class="module-box" rx="5"/>
+  <text x="890" y="105" class="label-text" text-anchor="middle" font-weight="bold">2. Runtime Robot State</text>
+  <text x="675" y="125" class="code-text">• EE world pose from sim (scene["robot"].data.body_state_w)</text>
+  <text x="675" y="140" class="code-text">• Root world pose (robot base)</text>
+  <text x="675" y="155" class="code-text">• Current target in base frame (PathPlanningEnvironment.set_target)</text>
+
+  <!-- Arrows into scene setup -->
+  <path d="M 310 170 L 310 210" class="flow-arrow"/>
+  <path d="M 890 170 L 890 210" class="flow-arrow"/>
+
+  <!-- Stage 3: Scene + obstacle construction -->
+  <rect x="260" y="210" width="680" height="80" class="module-box" rx="5"/>
+  <text x="600" y="235" class="label-text" text-anchor="middle" font-weight="bold">3. Scene &amp; Obstacle Setup</text>
+  <text x="275" y="255" class="code-text">• PathPlanningSceneCfg / InteractiveScene → robot, wall(s)</text>
+  <text x="275" y="272" class="code-text">• env.spawn_wall(DEFAULT_ENV_CONFIG) → obstacle_data for planners</text>
+
+  <!-- Arrow down to planner selection -->
+  <path d="M 600 290 L 600 330" class="flow-arrow"/>
+
+  <!-- Stage 4: Planner selection (decision) -->
+  <polygon points="600,330 830,380 600,430 370,380" class="decision-box"/>
+  <text x="600" y="372" class="label-text" text-anchor="middle" font-weight="bold">4. Planner Selection</text>
+  <text x="600" y="392" class="condition-text" text-anchor="middle">algorithm ∈ {a_star, rrt, rrt_star, prm, a_star_plane}</text>
+
+  <!-- Planner branches -->
+  <!-- A* 3D -->
+  <rect x="120" y="450" width="220" height="90" class="module-box" rx="5"/>
+  <text x="230" y="472" class="label-text" text-anchor="middle" font-weight="bold">A* (3D)</text>
+  <text x="135" y="492" class="code-text">• snap_to_grid(start_pos, grid_resolution)</text>
+  <text x="135" y="508" class="code-text">• snap_to_grid(goal_pos, grid_resolution)</text>
+  <text x="135" y="524" class="code-text">• create_astar_3d_trajectory(..., use_3d=True)</text>
+
+  <!-- A* plane -->
+  <rect x="470" y="450" width="260" height="90" class="module-box" rx="5"/>
+  <text x="600" y="472" class="label-text" text-anchor="middle" font-weight="bold">A* on start-goal plane</text>
+  <text x="485" y="492" class="code-text">• basis_start_goal_plane(start, goal)</text>
+  <text x="485" y="508" class="code-text">• create_astar_plane_trajectory(..., use_3d=False, tool_radius)</text>
+  <text x="485" y="524" class="code-text">• Path planned in (Xₚ,Zₚ) and mapped back</text>
+
+  <!-- RRT / RRT* / PRM -->
+  <rect x="810" y="450" width="260" height="120" class="module-box" rx="5"/>
+  <text x="940" y="472" class="label-text" text-anchor="middle" font-weight="bold">RRT / RRT* / PRM</text>
+  <text x="825" y="492" class="code-text">• create_rrt_trajectory(..., use_3d=False)</text>
+  <text x="825" y="508" class="code-text">• create_rrt_star_trajectory(..., use_3d=False)</text>
+  <text x="825" y="524" class="code-text">• create_prm_trajectory(..., use_3d=False)</text>
+  <text x="825" y="542" class="small-text">All operate on obstacle_data + bounds from calculate_workspace_bounds</text>
+
+  <!-- Arrows from decision to branches -->
+  <path d="M 430 380 L 230 380 L 230 450" class="flow-arrow"/>
+  <text x="260" y="370" class="condition-text">a_star</text>
+
+  <path d="M 600 430 L 600 450" class="flow-arrow"/>
+  <text x="610" y="430" class="condition-text">a_star_plane</text>
+
+  <path d="M 770 380 L 940 380 L 940 450" class="flow-arrow"/>
+  <text x="870" y="370" class="condition-text">rrt / rrt_star / prm</text>
+
+  <!-- Arrow from branches down to normalization -->
+  <path d="M 230 540 L 230 590 L 600 590" class="flow-arrow"/>
+  <path d="M 600 540 L 600 590" class="flow-arrow"/>
+  <path d="M 940 570 L 940 590 L 600 590" class="flow-arrow"/>
+
+  <!-- Stage 5: Normalization (constant-speed, dt-based) -->
+  <rect x="260" y="590" width="680" height="100" class="module-box" rx="5"/>
+  <text x="600" y="615" class="label-text" text-anchor="middle" font-weight="bold">5. Path Normalization (Normalized Planners)</text>
+  <text x="275" y="635" class="code-text">• NormalizerParams(speed_mps, dt, return_poses)</text>
+  <text x="275" y="652" class="code-text">• create_*_trajectory_normalized(...) → calls raw planner + standardize_path</text>
+  <text x="275" y="669" class="code-text">• standardize_path: resample_constant_speed + optional downsample_by_points + build_poses_xyz_quat</text>
+
+  <!-- Arrow to final output -->
+  <path d="M 600 690 L 600 730" class="flow-arrow"/>
+
+  <!-- Stage 6: Normalized trajectory output -->
+  <rect x="380" y="730" width="440" height="80" class="output-box" rx="10"/>
+  <text x="600" y="755" class="label-text" text-anchor="middle" font-weight="bold">6. Normalized Trajectory (used by PathPlanningEnvironment)</text>
+  <text x="395" y="775" class="code-text">• exec_positions: [K, 3] xyz in world space</text>
+  <text x="395" y="791" class="code-text">• exec_poses: [K, 7] [x,y,z,qw,qx,qy,qz] (if return_poses=True)</text>
+  <text x="395" y="807" class="code-text">• times: [K] timestamps, total_length_m: [1], duration_s: [1]</text>
+
+  <!-- Legend -->
+  <g transform="translate(60, 720)">
+    <text x="0" y="0" class="label-text" font-weight="bold">Legend:</text>
+    <rect x="0" y="10" width="18" height="12" class="module-box" rx="2"/>
+    <text x="25" y="20" class="small-text">Computation / module (scene, planner, normalization)</text>
+    <rect x="0" y="30" width="18" height="12" class="decision-box" rx="2"/>
+    <text x="25" y="40" class="small-text">Choice / branching by algorithm</text>
+    <rect x="0" y="50" width="18" height="12" class="output-box" rx="2"/>
+    <text x="25" y="60" class="small-text">Final output used for IK tracking</text>
+  </g>
+</svg>
