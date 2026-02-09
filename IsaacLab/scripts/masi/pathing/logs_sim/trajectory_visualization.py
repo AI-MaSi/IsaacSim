@@ -12,6 +12,8 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection, Line3DCollection
 import sys
+import shutil
+import re
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -434,7 +436,7 @@ class TrajectoryVisualizerGUI:
         """Initialize the GUI application."""
         self.root = root
         self.root.title("Trajectory Visualizer")
-        self.root.geometry("750x580")
+        self.root.geometry("950x600")
 
         # Current directory for file searching
         self.current_dir = Path.cwd()
@@ -479,7 +481,7 @@ class TrajectoryVisualizerGUI:
         browse_btn.pack(side=tk.LEFT)
 
         # CSV file selection
-        ttk.Label(main_tab, text="Select Trajectory File(s) - Ctrl+Click for multi-select:", font=("Arial", 10)).grid(row=2, column=0, sticky=tk.W, pady=(10, 5))
+        ttk.Label(main_tab, text="Select Trajectory File(s) - Ctrl+Click for multi-select (click headers to sort):", font=("Arial", 10)).grid(row=2, column=0, sticky=tk.W, pady=(10, 5))
 
         # Treeview with scrollbar for CSV files (supports color coding)
         list_frame = ttk.Frame(main_tab)
@@ -488,11 +490,36 @@ class TrajectoryVisualizerGUI:
         scrollbar = ttk.Scrollbar(list_frame)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # Create Treeview with single column (enable multi-select)
-        self.file_treeview = ttk.Treeview(list_frame, height=10, show='tree',
+        # Create Treeview with columns (enable multi-select)
+        columns = ('source', 'start', 'end', 'mps', 'avg_err')
+        self.file_treeview = ttk.Treeview(list_frame, height=10, columns=columns,
                                           selectmode='extended', yscrollcommand=scrollbar.set)
         self.file_treeview.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.config(command=self.file_treeview.yview)
+
+        # Track sort state for each column
+        self.sort_reverse = {}
+
+        # Configure columns with clickable headers for sorting
+        self.file_treeview.heading('#0', text='Name', anchor=tk.W,
+                                    command=lambda: self._sort_by_column('name'))
+        self.file_treeview.heading('source', text='Source', anchor=tk.W,
+                                    command=lambda: self._sort_by_column('source'))
+        self.file_treeview.heading('start', text='Start Pose', anchor=tk.W,
+                                    command=lambda: self._sort_by_column('start'))
+        self.file_treeview.heading('end', text='End Pose', anchor=tk.W,
+                                    command=lambda: self._sort_by_column('end'))
+        self.file_treeview.heading('mps', text='MPS', anchor=tk.W,
+                                    command=lambda: self._sort_by_column('mps'))
+        self.file_treeview.heading('avg_err', text='Avg Err (m)', anchor=tk.W,
+                                    command=lambda: self._sort_by_column('avg_err'))
+
+        self.file_treeview.column('#0', width=200, minwidth=150)
+        self.file_treeview.column('source', width=50, minwidth=40)
+        self.file_treeview.column('start', width=150, minwidth=100)
+        self.file_treeview.column('end', width=150, minwidth=100)
+        self.file_treeview.column('mps', width=55, minwidth=45)
+        self.file_treeview.column('avg_err', width=75, minwidth=60)
 
         # Configure color tags for sim (light green) and real (light red)
         self.file_treeview.tag_configure('sim', background='#d4edda')  # light green
@@ -631,6 +658,9 @@ class TrajectoryVisualizerGUI:
         visualize_btn = ttk.Button(button_frame, text="Visualize", command=self.visualize, width=15)
         visualize_btn.pack(side=tk.LEFT, padx=5)
 
+        export_btn = ttk.Button(button_frame, text="Export Selected", command=self.export_selected, width=15)
+        export_btn.pack(side=tk.LEFT, padx=5)
+
         refresh_btn = ttk.Button(button_frame, text="Refresh List", command=self.populate_csv_files, width=15)
         refresh_btn.pack(side=tk.LEFT, padx=5)
 
@@ -688,7 +718,92 @@ SETTINGS:
             self.dir_var.set(str(self.current_dir))
             self.populate_csv_files()
 
-    def populate_csv_files(self):
+    def export_selected(self):
+        """Export selected trajectory files to a chosen directory, preserving folder structure."""
+        selection = self.file_treeview.selection()
+        if not selection:
+            messagebox.showwarning("No Selection", "Please select one or more trajectory files to export")
+            return
+
+        # Collect selected file info
+        selected_files = []
+        for item in selection:
+            display_name = self.file_treeview.item(item)['text']
+            if display_name in ["No trajectory CSV files found in directory", "No CSV files found in directory"]:
+                continue
+            trajectory_file = self.current_dir / display_name
+            if trajectory_file.exists():
+                selected_files.append(trajectory_file)
+
+        if not selected_files:
+            messagebox.showwarning("No Valid Files", "No valid trajectory files selected")
+            return
+
+        # Ask for destination directory
+        dest_dir = filedialog.askdirectory(
+            initialdir=self.current_dir,
+            title=f"Select Export Destination ({len(selected_files)} files)"
+        )
+
+        if not dest_dir:
+            return  # User cancelled
+
+        dest_path = Path(dest_dir)
+
+        try:
+            exported_count = 0
+            metrics_exported = set()  # Track which metrics files we've handled
+
+            for traj_file in selected_files:
+                # Preserve folder structure relative to current_dir
+                relative_path = traj_file.relative_to(self.current_dir)
+                dest_file = dest_path / relative_path
+
+                # Create parent directories if needed
+                dest_file.parent.mkdir(parents=True, exist_ok=True)
+
+                # Copy trajectory file
+                shutil.copy2(traj_file, dest_file)
+                exported_count += 1
+
+                # Also export corresponding metrics entry
+                metrics_file = traj_file.parent / "metrics.csv"
+                if metrics_file.exists() and metrics_file not in metrics_exported:
+                    # Extract run numbers for all selected files from this metrics file
+                    same_dir_files = [f for f in selected_files if f.parent == traj_file.parent]
+
+                    # Load full metrics
+                    metrics_df = pd.read_csv(metrics_file)
+
+                    # Collect rows for selected trajectories
+                    selected_rows = []
+                    for f in same_dir_files:
+                        match = re.search(r'_(\d+)(?:_sim)?$', f.stem)
+                        if match:
+                            run_number = int(match.group(1))
+                            if run_number <= len(metrics_df):
+                                selected_rows.append(run_number - 1)
+
+                    if selected_rows:
+                        # Export only selected metrics rows (keep original trajectory_id)
+                        export_metrics = metrics_df.iloc[selected_rows].copy()
+
+                        # Save metrics in the same relative folder
+                        relative_metrics_dir = traj_file.parent.relative_to(self.current_dir)
+                        metrics_dest = dest_path / relative_metrics_dir / "metrics.csv"
+                        export_metrics.to_csv(metrics_dest, index=False)
+
+                    metrics_exported.add(metrics_file)
+
+            messagebox.showinfo(
+                "Export Complete",
+                f"Successfully exported {exported_count} trajectory file(s) to:\n{dest_path}"
+            )
+
+        except Exception as e:
+            messagebox.showerror("Export Error", f"Failed to export files:\n{e}")
+
+    def populate_csv_files(self, sort_by='name', reverse=False):
         """Find and populate CSV files in the current directory and subdirectories with color coding."""
         # Clear existing items
         for item in self.file_treeview.get_children():
@@ -696,7 +811,7 @@ SETTINGS:
 
         try:
             # Search for CSV files recursively
-            csv_files = sorted(self.current_dir.rglob("*.csv"))
+            csv_files = list(self.current_dir.rglob("*.csv"))
 
             # Filter out files with "metrics" in the name
             trajectory_files = [f for f in csv_files if "metrics" not in f.stem.lower()]
@@ -705,19 +820,140 @@ SETTINGS:
                 self.file_treeview.insert('', 'end', text="No trajectory CSV files found in directory", tags=('unknown',))
                 return
 
-            # Add files to treeview with color coding based on data source
+            # Build file info list with metadata for sorting
+            self.file_info_list = []
             for csv_file in trajectory_files:
                 relative_path = csv_file.relative_to(self.current_dir)
                 display_name = f"{relative_path}"
 
                 # Determine data source from metrics.csv
                 data_source = self._get_data_source(csv_file)
+                # Display text for source column
+                source_display = "sim" if data_source == 'sim' else "irl" if data_source == 'real' else "?"
 
-                # Add item with appropriate tag for coloring
-                self.file_treeview.insert('', 'end', text=display_name, tags=(data_source,))
+                # Get trajectory metadata (start/end poses, mps, avg_err)
+                start_pose, end_pose, mps, avg_err = self._get_trajectory_metadata(csv_file)
+
+                # Get file modification time for date sorting
+                try:
+                    mod_time = csv_file.stat().st_mtime
+                except Exception:
+                    mod_time = 0
+
+                self.file_info_list.append({
+                    'path': csv_file,
+                    'display_name': display_name,
+                    'data_source': data_source,
+                    'source_display': source_display,
+                    'start_pose': start_pose,
+                    'end_pose': end_pose,
+                    'mps': mps,
+                    'avg_err': avg_err,
+                    'mod_time': mod_time
+                })
+
+            # Sort based on selected criteria
+            self._apply_sort(sort_by, reverse)
 
         except Exception as e:
             messagebox.showerror("Error", f"Failed to scan directory: {e}")
+
+    def _sort_by_column(self, column):
+        """Sort treeview by clicking column header."""
+        # Toggle sort direction for this column
+        reverse = self.sort_reverse.get(column, False)
+        self.sort_reverse[column] = not reverse
+
+        self._apply_sort(column, reverse)
+
+    def _apply_sort(self, sort_by, reverse):
+        """Apply sorting to file list and refresh treeview."""
+        if not hasattr(self, 'file_info_list') or not self.file_info_list:
+            return
+
+        # Clear existing items
+        for item in self.file_treeview.get_children():
+            self.file_treeview.delete(item)
+
+        # Sort based on criteria
+        if sort_by == "name":
+            self.file_info_list.sort(key=lambda x: x['display_name'].lower(), reverse=reverse)
+        elif sort_by == "source":
+            self.file_info_list.sort(key=lambda x: x['source_display'], reverse=reverse)
+        elif sort_by == "start":
+            self.file_info_list.sort(key=lambda x: x['start_pose'], reverse=reverse)
+        elif sort_by == "end":
+            self.file_info_list.sort(key=lambda x: x['end_pose'], reverse=reverse)
+        elif sort_by == "mps":
+            # Sort by mps (numerically), put N/A at the end
+            self.file_info_list.sort(
+                key=lambda x: (x['mps'] == 'N/A', float(x['mps']) if x['mps'] != 'N/A' else 0),
+                reverse=reverse
+            )
+        elif sort_by == "avg_err":
+            # Sort by avg_err (numerically), put N/A at the end
+            self.file_info_list.sort(
+                key=lambda x: (x['avg_err'] == 'N/A', float(x['avg_err']) if x['avg_err'] != 'N/A' else 0),
+                reverse=reverse
+            )
+
+        # Add files to treeview with metadata columns
+        for info in self.file_info_list:
+            self.file_treeview.insert('', 'end', text=info['display_name'],
+                                      values=(info['source_display'], info['start_pose'], info['end_pose'], info['mps'], info['avg_err']),
+                                      tags=(info['data_source'],))
+
+    def _get_trajectory_metadata(self, trajectory_file):
+        """Get start pose, end pose, mps, and avg tracking error from trajectory and metrics files."""
+        start_pose = "N/A"
+        end_pose = "N/A"
+        mps = "N/A"
+        avg_err = "N/A"
+
+        try:
+            # Load trajectory to get start/end positions
+            df = pd.read_csv(trajectory_file)
+            if all(col in df.columns for col in ['x_g', 'y_g', 'z_g']):
+                if len(df) > 0:
+                    # Start pose (first goal point)
+                    start = df.iloc[0]
+                    start_pose = f"({start['x_g']:.2f}, {start['y_g']:.2f}, {start['z_g']:.2f})"
+                    # End pose (last goal point)
+                    end = df.iloc[-1]
+                    end_pose = f"({end['x_g']:.2f}, {end['y_g']:.2f}, {end['z_g']:.2f})"
+        except Exception:
+            pass
+
+        try:
+            # Find metrics.csv in the same directory
+            metrics_file = trajectory_file.parent / "metrics.csv"
+
+            if metrics_file.exists():
+                # Extract run number from trajectory filename
+                trajectory_stem = trajectory_file.stem
+                match = re.search(r'_(\d+)(?:_sim)?$', trajectory_stem)
+
+                if match:
+                    run_number = int(match.group(1))
+
+                    # Load metrics and get pathing speed and avg error
+                    metrics_df = pd.read_csv(metrics_file)
+
+                    if run_number <= len(metrics_df):
+                        row_index = run_number - 1
+                        row = metrics_df.iloc[row_index]
+
+                        # Check for speed_mps column
+                        if 'speed_mps' in row:
+                            mps = f"{float(row['speed_mps']):.3f}"
+
+                        # Check for avg_tracking_error_m column
+                        if 'avg_tracking_error_m' in row:
+                            avg_err = f"{float(row['avg_tracking_error_m']):.4f}"
+        except Exception:
+            pass
+
+        return start_pose, end_pose, mps, avg_err
 
     def _get_data_source(self, trajectory_file):
         """Determine if trajectory is from simulation or real hardware by checking metrics.csv."""
@@ -729,7 +965,6 @@ SETTINGS:
                 return 'unknown'
 
             # Extract run number from trajectory filename
-            import re
             trajectory_stem = trajectory_file.stem
             match = re.search(r'_(\d+)(?:_sim)?$', trajectory_stem)  # Handle both with and without _sim suffix
 
@@ -783,7 +1018,6 @@ SETTINGS:
         run_number = None
 
         # Try to extract run number from filename (look for _N or _N_sim pattern)
-        import re
         match = re.search(r'_(\d+)(?:_sim)?$', trajectory_stem)
         if match:
             run_number = int(match.group(1))
@@ -947,7 +1181,6 @@ SETTINGS:
                 if metrics_file.exists():
                     try:
                         # Extract run number from trajectory filename
-                        import re
                         trajectory_stem = trajectory_file.stem
                         match = re.search(r'_(\d+)(?:_sim)?$', trajectory_stem)
                         row_index = int(match.group(1)) - 1 if match else 0

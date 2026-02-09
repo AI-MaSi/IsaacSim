@@ -21,9 +21,12 @@ from .path_planning_algorithms import (
     # High-level wrapper functions
     create_astar_3d_trajectory,
     create_astar_plane_trajectory,
+    create_rrt_plane_trajectory,
+    create_rrt_star_plane_trajectory,
     create_rrt_trajectory,
     create_rrt_star_trajectory,
     create_prm_trajectory,
+    create_prm_plane_trajectory,
     # Helper functions
     setup_planner_environment,
 )
@@ -78,9 +81,12 @@ __all__ = [
     # High-level wrapper functions
     "create_astar_3d_trajectory",
     "create_astar_plane_trajectory",
+    "create_rrt_plane_trajectory",
+    "create_rrt_star_plane_trajectory",
     "create_rrt_trajectory",
     "create_rrt_star_trajectory",
     "create_prm_trajectory",
+    "create_prm_plane_trajectory",
     "setup_planner_environment",
     # Path utilities
     "interpolate_path",

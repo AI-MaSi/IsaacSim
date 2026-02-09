@@ -27,7 +27,7 @@ import math
 import numpy as np
 import random
 import time
-from typing import List, Tuple, Optional, Dict, Any, Set, TypeAlias
+from typing import List, Tuple, Optional, Dict, Any, Set, TypeAlias, Callable
 from dataclasses import dataclass
 
 # Import utilities from path_utils
@@ -1426,6 +1426,233 @@ def create_astar_plane_trajectory(
     logger.info(f"Planar A* found path with {len(path_world)} waypoints on start→goal plane")
 
     return path_array
+
+
+def _build_planar_environment(
+    start_pos: Point3D,
+    goal_pos: Point3D,
+    wall_obstacle: Dict[str, Any],
+    *,
+    grid_resolution: float,
+    safety_margin: float,
+    pad_xyz: Tuple[float, float, float] = (0.20, 0.05, 0.20),
+) -> Tuple[
+    GridConfig,
+    List[Dict[str, Any]],
+    np.ndarray,
+    np.ndarray,
+    Callable[[np.ndarray], np.ndarray],
+    Callable[[np.ndarray], np.ndarray],
+]:
+    """Build plane-frame environment and transforms for start-goal plane planning."""
+    s_w = np.asarray(start_pos, dtype=np.float32)
+    g_w = np.asarray(goal_pos, dtype=np.float32)
+
+    Xp, Yp, Zp = basis_start_goal_plane(s_w, g_w)
+    R_wp = np.stack([Xp, Yp, Zp], axis=1)
+
+    def world_to_plane(p_w: np.ndarray) -> np.ndarray:
+        return R_wp.T @ (p_w - s_w)
+
+    def plane_to_world(p_p: np.ndarray) -> np.ndarray:
+        return (R_wp @ p_p) + s_w
+
+    size_w = np.asarray(wall_obstacle["size"], dtype=np.float32)
+    pos_w = np.asarray(wall_obstacle["pos"], dtype=np.float32)
+    rot_w = np.asarray(wall_obstacle.get("rot", [1, 0, 0, 0]), dtype=np.float32)
+
+    size_p = size_w.astype(np.float32).copy()
+    size_p[1] = max(size_p[1], 1e-3)
+    size_p[0] += 2.0 * safety_margin
+    size_p[2] += 2.0 * safety_margin
+
+    pos_p = world_to_plane(pos_w)
+
+    q_wp = rotation_matrix_to_quaternion(R_wp)
+    q_wp_conj = quaternion_conjugate(q_wp)
+    rot_p = quaternion_multiply(q_wp_conj, rot_w)
+
+    wall_plane = [{
+        "size": size_p,
+        "pos": pos_p.astype(np.float32),
+        "rot": rot_p.astype(np.float32),
+    }]
+
+    s_p = world_to_plane(s_w)
+    s_p[1] = 0.0
+    g_p = world_to_plane(g_w)
+    g_p[1] = 0.0
+
+    half_size = size_p * 0.5
+    obs_min = pos_p - half_size
+    obs_max = pos_p + half_size
+    pts = np.stack([s_p, g_p, obs_min, obs_max], axis=0)
+    pad = np.asarray(pad_xyz, dtype=np.float32)
+    bmin = np.min(pts, axis=0) - pad
+    bmax = np.max(pts, axis=0) + pad
+
+    grid_cfg = GridConfig(
+        resolution=float(grid_resolution),
+        bounds_min=(float(bmin[0]), float(bmin[1]), float(bmin[2])),
+        bounds_max=(float(bmax[0]), float(bmax[1]), float(bmax[2])),
+        safety_margin=float(safety_margin),
+    )
+
+    return grid_cfg, wall_plane, s_p, g_p, world_to_plane, plane_to_world
+
+
+def create_rrt_plane_trajectory(
+    start_pos: Point3D,
+    goal_pos: Point3D,
+    obstacle_data: ObstacleData,
+    grid_resolution: float = 0.01,
+    safety_margin: float = 0.02,
+    max_iterations: int = 10000,
+    max_acceptable_cost: Optional[float] = None,
+    max_step_size: float = 0.05,
+    goal_bias: float = 0.1,
+    goal_tolerance: float = 0.02,
+) -> np.ndarray:
+    """Plan RRT path on the vertical plane containing start-goal and return world-frame waypoints."""
+    if not obstacle_data:
+        raise InvalidInputError("Planar RRT requires at least one obstacle (wall) in obstacle_data")
+
+    wall_obstacle = obstacle_data[0]
+    grid_cfg, wall_plane, s_p, g_p, _, plane_to_world = _build_planar_environment(
+        start_pos,
+        goal_pos,
+        wall_obstacle,
+        grid_resolution=grid_resolution,
+        safety_margin=safety_margin,
+    )
+
+    obs_checker = ObstacleChecker(wall_plane, safety_margin=0.0)
+    planner = RRT(
+        grid_cfg,
+        obs_checker,
+        use_3d=False,
+        max_step_size=max_step_size,
+        goal_bias=goal_bias,
+        goal_tolerance=goal_tolerance,
+        verbose=False,
+    )
+
+    path_plane = planner.plan_path(
+        tuple(s_p.tolist()),
+        tuple(g_p.tolist()),
+        max_iterations=max_iterations,
+        max_acceptable_cost=max_acceptable_cost,
+    )
+
+    path_world = []
+    for p in path_plane:
+        pp = np.array([p[0], 0.0, p[2]], dtype=np.float32)
+        pw = plane_to_world(pp)
+        path_world.append(pw.tolist())
+
+    return np.asarray(path_world, dtype=np.float32)
+
+
+def create_rrt_star_plane_trajectory(
+    start_pos: Point3D,
+    goal_pos: Point3D,
+    obstacle_data: ObstacleData,
+    grid_resolution: float = 0.01,
+    safety_margin: float = 0.02,
+    max_iterations: int = 10000,
+    max_acceptable_cost: Optional[float] = None,
+    max_step_size: float = 0.05,
+    goal_bias: float = 0.1,
+    rewire_radius: float = 0.08,
+    goal_tolerance: float = 0.02,
+    minimum_iterations: int = 1000,
+    cost_improvement_patience: int = 5000,
+) -> np.ndarray:
+    """Plan RRT* path on the vertical plane containing start-goal and return world-frame waypoints."""
+    if not obstacle_data:
+        raise InvalidInputError("Planar RRT* requires at least one obstacle (wall) in obstacle_data")
+
+    wall_obstacle = obstacle_data[0]
+    grid_cfg, wall_plane, s_p, g_p, _, plane_to_world = _build_planar_environment(
+        start_pos,
+        goal_pos,
+        wall_obstacle,
+        grid_resolution=grid_resolution,
+        safety_margin=safety_margin,
+    )
+
+    obs_checker = ObstacleChecker(wall_plane, safety_margin=0.0)
+    planner = RRTStar(
+        grid_cfg,
+        obs_checker,
+        use_3d=False,
+        max_step_size=max_step_size,
+        goal_bias=goal_bias,
+        rewire_radius=rewire_radius,
+        goal_tolerance=goal_tolerance,
+        minimum_iterations=minimum_iterations,
+        cost_improvement_patience=cost_improvement_patience,
+    )
+
+    path_plane = planner.plan_path(
+        tuple(s_p.tolist()),
+        tuple(g_p.tolist()),
+        max_iterations=max_iterations,
+        max_acceptable_cost=max_acceptable_cost,
+    )
+
+    path_world = []
+    for p in path_plane:
+        pp = np.array([p[0], 0.0, p[2]], dtype=np.float32)
+        pw = plane_to_world(pp)
+        path_world.append(pw.tolist())
+
+    return np.asarray(path_world, dtype=np.float32)
+
+
+def create_prm_plane_trajectory(
+    start_pos: Point3D,
+    goal_pos: Point3D,
+    obstacle_data: ObstacleData,
+    grid_resolution: float = 0.01,
+    safety_margin: float = 0.02,
+    num_samples: int = 1500,
+    connection_radius: float = 0.20,
+    max_connections_per_node: int = 15,
+) -> np.ndarray:
+    """Plan PRM path on the vertical plane containing start-goal and return world-frame waypoints."""
+    if not obstacle_data:
+        raise InvalidInputError("Planar PRM requires at least one obstacle (wall) in obstacle_data")
+
+    wall_obstacle = obstacle_data[0]
+    grid_cfg, wall_plane, s_p, g_p, _, plane_to_world = _build_planar_environment(
+        start_pos,
+        goal_pos,
+        wall_obstacle,
+        grid_resolution=grid_resolution,
+        safety_margin=safety_margin,
+        pad_xyz=(0.25, 0.05, 0.25),
+    )
+
+    obs_checker = ObstacleChecker(wall_plane, safety_margin=0.0)
+    planner = PRM(
+        grid_cfg,
+        obs_checker,
+        use_3d=False,
+        num_samples=num_samples,
+        connection_radius=connection_radius,
+        max_connections_per_node=max_connections_per_node,
+    )
+
+    path_plane = planner.plan_path(tuple(s_p.tolist()), tuple(g_p.tolist()))
+
+    path_world = []
+    for p in path_plane:
+        pp = np.array([p[0], 0.0, p[2]], dtype=np.float32)
+        pw = plane_to_world(pp)
+        path_world.append(pw.tolist())
+
+    return np.asarray(path_world, dtype=np.float32)
 
 
 def create_rrt_star_trajectory(start_pos: Tuple[float, float, float],

@@ -1,0 +1,91 @@
+# Control algorithm configuration for excavator simulation
+# Used by: run_sim.py (IK controller + velocity limiting)
+# Note: PID and output limits are hardware-only (PhysX handles joint control in sim)
+
+controller:
+  # Joint velocity limiting (applied at IK level for cleaner architecture)
+  # Set to False to disable velocity limiting entirely
+  enable_velocity_limiting: true
+
+  # Per-joint velocity limits in rad/iter [slew, boom, arm, bucket]
+  # Formula: rad/iter = degrees/sec / (57.3 * update_frequency)
+  per_joint_max_velocity: [0.10, 0.25, 0.25, 0.25]
+
+
+# Inverse Kinematics configuration
+# Used by: ExcavatorController, IKController
+ik:
+  # Command type: "position" (3D) or "pose" (6D with orientation)
+  command_type: "pose"
+
+  # Whether commands are relative to current pose (delta commands)
+  use_relative_mode: true
+
+  # IK solving method: "pinv", "svd", "trans", or "dls" (damped least squares)
+  method: "dls"
+
+  # Velocity mode: interpret commands as desired EE velocities
+  velocity_mode: true
+  velocity_error_gain: 200.0  # Note: depends on hw/sim_dt!
+  use_rotational_velocity: true
+
+  # Method/weighting parameters
+  # Note: k_val and lambda_val have decreased effect when velocity_mode is enabled,
+  # as velocity_error_gain and per_joint_max_velocity dominate the response.
+  params:
+    # For pinv, svd, trans
+    k_val: 1.15 # 1.15
+
+    # For svd
+    min_singular_value: 1.0e-5
+
+    # For dls
+    lambda_val: 0.01  # Base (min) value if adaptive damping is used
+
+    # General
+    position_weight: 1.0
+    rotation_weight: 1.1  #1.1,  1.2 for delta position control
+    joint_weights: [1.0, 1.0, 0.8, 1.0]  # [1.0, 1.0, 0.8, 1.0], [1.0, 1.0, 1.0, 0.8] for delta position control
+
+
+  # Adaptive damping (DLS method only)
+  # Adjusts lambda based on Jacobian condition number for better singularity handling.
+  # Formula: lambda_adaptive = lambda_val * (1 + scaling * log(1 + condition_number))
+  # Clamped to: lambda_val <= lambda_adaptive <= lambda_val * max_multiplier
+
+  enable_adaptive_damping: true
+  adaptive_damping_scaling: 0.5        # How aggressively lambda increases near singularities
+  adaptive_damping_max_multiplier: 10.0  # Maximum lambda = lambda_val * max_multiplier
+
+  # Relative-mode gains (applied to per-step delta pose when relative mode is enabled)
+  relative_pos_gain: 3.0  # 1.0/3.0 irl/sim. Position delta control
+  relative_rot_gain: 1.0
+
+  # Axes to ignore in orientation error during IK solving.
+  # Any combination of: roll, pitch, yaw
+  # For excavator: roll is locked (hardware), yaw follows slew automatically.
+  # User controls position (X,Y,Z) and pitch only.
+  ignore_axes: ["roll", "yaw"]
+
+  # Use reduced Jacobian (removes uncontrollable DOFs like roll)
+  # Recommended for cleaner excavator control
+  use_reduced_jacobian: true
+
+  # Relative joint limits (degrees) for [slew, boom, arm, bucket]
+  # Leave empty [] to use default [-π, π] for all joints
+  # Example: [[-30.0, 30.0], [-45.0, 60.0], [-90.0, 90.0], [-90.0, 90.0]]
+  joint_limits_relative: []
+
+  # Joint weight scheduling - dynamically adjust joint weights based on EE position
+  # Formula: scale = (r_nominal / clamp(r, r_min, r_max))^exponent
+  # where r = sqrt(x² + y²) is horizontal radial distance from slew axis
+  # At r_nominal: scale = 1.0 (base weight applies - set this to typical working distance)
+  # At r < r_nominal: scale > 1.0 (more slew allowed when close)
+  # At r > r_nominal: scale < 1.0 (less slew allowed when extended)
+  joint_weight_scheduling:
+    enabled: true
+    joint0:  # slew
+      r_min: 0.35          # clamp reach below this (m) - prevents extreme scaling
+      r_max: 0.7          # clamp reach above this (m) - ~max working radius
+      r_nominal: 0.5      # typical working distance where base weight applies
+      exponent: 1.8       # power law (1.0 = linear, 2.0 = square)

@@ -3,14 +3,16 @@
 
 import argparse
 import logging
-import numpy as np
-import torch
-import sys
+import math
 import os
-from typing import Tuple, List, Optional
-import datetime
-import pandas as pd
 import time
+from typing import List, Optional, Tuple
+
+import csv
+
+import numpy as np  # for easy logging
+import torch
+import yaml
 
 # Configure logging - will be set based on CLI args after parsing
 # Create logger for this module
@@ -18,72 +20,80 @@ logger = logging.getLogger(__name__)
 
 from isaaclab.app import AppLauncher
 
-# Simplified argparse - only keep essential launcher args
-parser = argparse.ArgumentParser(description="Path planning pathing demo")
-parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to spawn.")
-parser.add_argument("--algorithm", type=str, default="a_star", choices=["a_star", "rrt", "rrt_star", "prm", "a_star_plane",], help="Path planning algorithm to use.")
 
-# Debug options
-parser.add_argument("--debug", action="store_true", help="Enable debug mode with verbose logging")
-parser.add_argument("--debug-trajectory", action="store_true", help="Log detailed trajectory waypoint info")
-parser.add_argument("--debug-ik", action="store_true", help="Log IK controller commands and joint states")
-parser.add_argument("--debug-planning", action="store_true", help="Enable verbose path planning algorithm output")
-parser.add_argument("--pause-on-goal", action="store_true", help="Pause simulation when goal is reached for inspection")
-
-# Append AppLauncher cli args
-AppLauncher.add_app_launcher_args(parser)
-# Parse the arguments
-args_cli = parser.parse_args()
-
-# Configure logging based on debug flags
-if args_cli.debug:
-    # Full debug mode - everything verbose
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format='[%(levelname)s] %(message)s'
+def _build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Path planning pathing demo")
+    parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to spawn.")
+    parser.add_argument(
+        "--algorithm",
+        type=str,
+        default="a_star",
+        choices=[
+            "a_star",
+            "rrt",
+            "rrt_star",
+            "prm",
+            "a_star_plane",
+            "rrt_plane",
+            "rrt_star_plane",
+            "prm_plane",
+        ],
+        help="Path planning algorithm to use.",
     )
-    logger.setLevel(logging.DEBUG)
-    logging.getLogger('pathing.path_planning_algorithms').setLevel(logging.DEBUG)
-elif args_cli.debug_planning:
-    # Only path planning debug
-    logging.basicConfig(
-        level=logging.INFO,
-        format='[%(levelname)s] %(message)s'
-    )
+    parser.add_argument("--debug", action="store_true", help="Enable debug mode with verbose logging")
+    parser.add_argument("--log", action="store_true", help="Enable trajectory CSV/metrics logging")
+    parser.add_argument("--debug-planning", action="store_true", help="Enable verbose path planning algorithm output")
+    parser.add_argument("--pause-on-goal", action="store_true", help="Pause simulation when goal is reached for inspection")
+    AppLauncher.add_app_launcher_args(parser)
+    return parser
+
+
+def _parse_args() -> argparse.Namespace:
+    args = _build_arg_parser().parse_args()
+    args.device = "cpu"
+    return args
+
+
+def _configure_logging(args: argparse.Namespace) -> None:
+    if args.debug:
+        logging.basicConfig(level=logging.DEBUG, format='[%(levelname)s] %(message)s')
+        logger.setLevel(logging.DEBUG)
+        logging.getLogger("pathing.path_planning_algorithms").setLevel(logging.DEBUG)
+        return
+    if args.debug_planning:
+        logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
+        logger.setLevel(logging.INFO)
+        logging.getLogger("pathing.path_planning_algorithms").setLevel(logging.DEBUG)
+        return
+    logging.basicConfig(level=logging.WARNING, format='[%(levelname)s] %(message)s')
     logger.setLevel(logging.INFO)
-    logging.getLogger('pathing.path_planning_algorithms').setLevel(logging.DEBUG)
-elif args_cli.debug_trajectory or args_cli.debug_ik:
-    # Trajectory/IK debug
-    logging.basicConfig(
-        level=logging.INFO,
-        format='[%(levelname)s] %(message)s'
-    )
-    logger.setLevel(logging.INFO)
-else:
-    # Normal mode - show INFO level for main logger (status updates), WARNING+ for everything else
-    logging.basicConfig(
-        level=logging.WARNING,
-        format='[%(levelname)s] %(message)s'
-    )
-    logger.setLevel(logging.INFO)  # Our logger shows INFO in normal mode
 
-# Launch omniverse app
+
+args_cli = _parse_args()
+_configure_logging(args_cli)
+
+# Launch omniverse app before importing rest of Isaac modules
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
+
 """Rest everything follows."""
 
-import torch
-from typing import Literal
 import isaaclab.sim as sim_utils
 from isaaclab.assets import AssetBaseCfg, RigidObject, RigidObjectCfg
 from isaaclab.managers import SceneEntityCfg
-from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
+from isaaclab.markers import VisualizationMarkers
 from isaaclab.markers.config import FRAME_MARKER_CFG
 from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
 from isaaclab.utils import configclass
-from isaaclab.utils.math import subtract_frame_transforms, compute_pose_error, matrix_from_quat, quat_inv, quat_from_euler_xyz, euler_xyz_from_quat, combine_frame_transforms
-from collections import deque
+from isaaclab.utils.math import (
+    subtract_frame_transforms,
+    compute_pose_error,
+    matrix_from_quat,
+    quat_inv,
+    quat_from_euler_xyz,
+    combine_frame_transforms,
+)
 from pathing.path_planning_algorithms import (
     ObstacleChecker,
     AStarParams,
@@ -97,16 +107,36 @@ from pathing.path_planning_algorithms import (
 )
 from pathing.normalized_planners import (
     NormalizerParams,
-    create_astar_plane_trajectory_normalized,
-    create_rrt_star_trajectory_normalized,
-    create_rrt_trajectory_normalized,
-    create_prm_trajectory_normalized,
     plan_to_target,
 )
 from configuration_files.pathing_config import (
-    EnvironmentConfig, PathExecutionConfig,
-    DEFAULT_ENV_CONFIG, DEFAULT_CONFIG
+    EnvironmentConfig,
+    DEFAULT_ENV_CONFIG,
+    DEFAULT_CONFIG,
 )
+
+
+def load_control_config(config_path: str = None) -> dict:
+    """Load control configuration from YAML file (matches IRL 1:1).
+
+    Args:
+        config_path: Path to control_config.yaml. If None, uses default location.
+
+    Returns:
+        Dictionary with control configuration values.
+    """
+    if config_path is None:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        config_path = os.path.join(script_dir, "configuration_files", "control_config.yaml")
+
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f)
+
+    return config
+
+
+# Load control configuration from YAML (same file can be used for IRL and sim)
+CONTROL_CONFIG = load_control_config()
 from pathing.path_utils import (
     calculate_path_length,
     precompute_cumulative_distances,
@@ -119,10 +149,20 @@ from sim_controllers.differential_ik_cfg import DifferentialIKControllerCfg
 from sim_controllers.differential_ik import DifferentialIKController
 from isaaclab_assets import MASI_PATHING_CFG as CFG  # isort:skip
 
-# Visualization toggles (sim-only)
+# Visualization toggles
 SHOW_RELATIVE_PULL_MARKER: bool = True
 RELATIVE_PULL_MARKER_SCALE_M: float = 0.01  # 10 mm sphere/frame size
 RELATIVE_PULL_MARKER_POSITION_SCALE: float = 3.0  # Exaggerate the pull target position for visibility
+ALGORITHM_LABELS = {
+    "a_star": "A*",
+    "rrt": "RRT",
+    "rrt_star": "RRT*",
+    "prm": "PRM",
+    "a_star_plane": "A* Plane",
+    "rrt_plane": "RRT Plane",
+    "rrt_star_plane": "RRT* Plane",
+    "prm_plane": "PRM Plane",
+}
 
 @configclass
 class PathPlanningSceneCfg(InteractiveSceneCfg):
@@ -147,21 +187,17 @@ class PathPlanningSceneCfg(InteractiveSceneCfg):
     )
 
 
-# Helper used only for A* debug logging.
-# NOTE: The actual A* implementation snaps to the grid internally using
-# its own GridConfig (with bounds_min as origin). This helper ignores
-# bounds_min and therefore is only an approximate visualization of what
-# the planner does, not the exact internal mapping.
-def snap_to_grid(pos: Tuple[float, float, float], resolution: float) -> Tuple[float, float, float]:
-    return tuple(round(p / resolution) * resolution for p in pos)
-
-
 class PathPlanningEnvironment:
     """Main class for path planning with obstacle avoidance."""
 
-    def __init__(self, sim: sim_utils.SimulationContext, scene: InteractiveScene):
+    def _as_device_tensor(self, data, *, dtype: torch.dtype = torch.float32) -> torch.Tensor:
+        return torch.as_tensor(data, device=self.sim.device, dtype=dtype)
+
+    def __init__(self, sim: sim_utils.SimulationContext, scene: InteractiveScene, enable_logging: bool = True, headless: bool = False):
         self.sim = sim
         self.scene = scene
+        self.enable_logging = enable_logging
+        self.headless = headless
         self.robot = scene["robot"]
         self.obstacle_data = []
 
@@ -169,8 +205,9 @@ class PathPlanningEnvironment:
         self.path_config = DEFAULT_CONFIG  # Use shared config
         self.env_config = DEFAULT_ENV_CONFIG  # Store environment config for metrics
 
-        # Initialize markers
-        self._init_markers()
+        # Initialize markers (skip in headless - no viewport to display them)
+        if not self.headless:
+            self._init_markers()
 
         # Initialize IK controller
         self._init_ik_controller()
@@ -204,11 +241,6 @@ class PathPlanningEnvironment:
         self.current_waypoint_quat = torch.zeros(scene.num_envs, 4, device=self.sim.device)
         self.current_waypoint_quat[:, 0] = 1.0  # Initialize to identity quaternion
 
-        # Debug options (controlled by CLI args)
-        self.debug_pose_logging: bool = args_cli.debug or args_cli.debug_trajectory
-        self.debug_trajectory: bool = args_cli.debug_trajectory
-        self.debug_ik: bool = args_cli.debug_ik
-
         # Goal evaluation tolerances come from shared config (pathing_config.PathExecutionConfig)
 
         # Trajectory storage and control (time-based like real hardware)
@@ -237,6 +269,8 @@ class PathPlanningEnvironment:
 
     def init_logging(self, algorithm_name: str, base_log_dir: str = "logs"):
         """Initialize logging directories and files."""
+        if not self.enable_logging:
+            return
         # Create main logs directory
         os.makedirs(base_log_dir, exist_ok=True)
         
@@ -270,6 +304,8 @@ class PathPlanningEnvironment:
     def log_trajectory_step(self, planned_pos: torch.Tensor, actual_pos: torch.Tensor, 
                            planned_quat: torch.Tensor, actual_quat: torch.Tensor, joint_angles: torch.Tensor):
         """Log a single step of trajectory execution with waypoint tracking, orientations, and joint angles."""
+        if not self.enable_logging:
+            return
         # Convert to numpy for easier handling
         planned_pos_np = planned_pos.cpu().numpy()
         actual_pos_np = actual_pos.cpu().numpy()
@@ -319,6 +355,8 @@ class PathPlanningEnvironment:
     
     def save_trajectory_log(self, algorithm_name: str):
         """Save trajectory log to CSV file."""
+        if not self.enable_logging:
+            return
         if not self.trajectory_log:
             return
     
@@ -336,25 +374,31 @@ class PathPlanningEnvironment:
                    'quat_e_w', 'quat_e_x', 'quat_e_y', 'quat_e_z',
                    'joint_1', 'joint_2', 'joint_3', 'joint_4',
                    'waypoint_idx', 'progress']
-        df = pd.DataFrame(self.trajectory_log, columns=columns)
         csv_path = os.path.join(self.log_dir, f"{algorithm_name}_{self.trajectory_counter}_sim.csv")
-        df.to_csv(csv_path, index=False)
+        with open(csv_path, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(columns)
+            writer.writerows(self.trajectory_log)
         
-        # Calculate time to reach threshold (excludes settling time after reaching target)
+        # Calculate time to reach threshold (relative to post-planning start, matches HW logger)
         at_threshold_time_s = None
         if self.at_threshold_time is not None:
-            at_threshold_time_s = self.at_threshold_time - self.execution_start_time
+            at_threshold_time_s = self.at_threshold_time - self.execution_start_time - self.calculation_time
+
+        real_execution_time = self.execution_time - self.calculation_time
+        sim_hz = (self.simulation_steps_logged / real_execution_time) if real_execution_time > 0 else None
 
         # Save metrics with more detailed waypoint counts
         metrics = {
             'trajectory_id': self.trajectory_counter,
-            'data_source': 'simulation',  # Mark as simulation data
             'algorithm': algorithm_name,
+            'data_source': 'simulation',  # Mark as simulation data
             'calculation_time_s': self.calculation_time,
-            'execution_time_s': self.execution_time - self.calculation_time,
+            'execution_time_s': real_execution_time,
             'at_threshold_time_s': at_threshold_time_s,
             'trajectory_waypoints': self.trajectory_waypoints,  # Execution waypoints
             'simulation_steps': self.simulation_steps_logged,   # Logged simulation steps
+            'sim_hz': sim_hz,
             'planned_distance_m': self.total_distance_planned,
             'executed_distance_m': self.total_distance_executed,
             'max_tracking_error_m': self.max_tracking_error,
@@ -379,15 +423,16 @@ class PathPlanningEnvironment:
         metrics['use_3d'] = self.path_config.use_3d
         metrics['final_target_tolerance'] = self.path_config.final_target_tolerance
         metrics['orientation_tolerance'] = self.path_config.orientation_tolerance
-        metrics['ik_velocity_mode'] = getattr(self.path_config, 'ik_velocity_mode', None)
-        metrics['ik_velocity_error_gain'] = getattr(self.path_config, 'ik_velocity_error_gain', None)
-        metrics['ik_use_rotational_velocity'] = getattr(self.path_config, 'ik_use_rotational_velocity', None)
-        metrics['ik_method'] = self.path_config.ik_method
-        metrics['ik_command_type'] = self.path_config.ik_command_type
-        metrics['ik_use_relative_mode'] = self.path_config.ik_use_relative_mode
-        if getattr(self.path_config, 'ik_use_relative_mode', False):
-            metrics['relative_pos_gain'] = getattr(self.path_config, 'relative_pos_gain', None)
-            metrics['relative_rot_gain'] = getattr(self.path_config, 'relative_rot_gain', None)
+        # IK parameters from control_config.yaml
+        metrics['ik_velocity_mode'] = self.ik_config.get('velocity_mode', None)
+        metrics['ik_velocity_error_gain'] = self.ik_config.get('velocity_error_gain', None)
+        metrics['ik_use_rotational_velocity'] = self.ik_config.get('use_rotational_velocity', None)
+        metrics['ik_method'] = self.ik_config.get('method', None)
+        metrics['ik_command_type'] = self.ik_config.get('command_type', None)
+        metrics['ik_use_relative_mode'] = self.ik_config.get('use_relative_mode', None)
+        if self.ik_config.get('use_relative_mode', False):
+            metrics['relative_pos_gain'] = self.ik_config.get('relative_pos_gain', None)
+            metrics['relative_rot_gain'] = self.ik_config.get('relative_rot_gain', None)
 
         # Add environment/obstacle configuration parameters (matching hardware logger)
         metrics['wall_size_x'] = self.env_config.wall_size[0]
@@ -402,13 +447,14 @@ class PathPlanningEnvironment:
         metrics['wall_rot_z'] = self.env_config.wall_rot[3]
         
         metrics_path = os.path.join(self.log_dir, "metrics.csv")
-        metrics_df = pd.DataFrame([metrics])
-        
+
         # Append to existing metrics file or create new one
-        if os.path.exists(metrics_path):
-            metrics_df.to_csv(metrics_path, mode='a', header=False, index=False)
-        else:
-            metrics_df.to_csv(metrics_path, index=False)
+        file_exists = os.path.exists(metrics_path)
+        with open(metrics_path, 'a', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=metrics.keys())
+            if not file_exists:
+                writer.writeheader()
+            writer.writerow(metrics)
         
         real_execution_time = self.execution_time - self.calculation_time
         logger.info(f"Saved trajectory {self.trajectory_counter} to {csv_path}")
@@ -448,32 +494,48 @@ class PathPlanningEnvironment:
         self.rel_pull_marker = VisualizationMarkers(pull_marker_cfg.replace(prim_path="/Visuals/ee_rel_pull"))
 
     def _init_ik_controller(self):
-        """Initialize the differential IK controller (SIM) to mirror IRL behaviour."""
+        """Initialize the differential IK controller (SIM) to mirror IRL behaviour.
+
+        Configuration is loaded from control_config.yaml (same file used by IRL system).
+        """
+        ik_cfg = CONTROL_CONFIG.get("ik", {})
+        ctrl_cfg = CONTROL_CONFIG.get("controller", {})
+
+        # Store IK config for logging/metrics
+        self.ik_config = ik_cfg
+
         # Optional joint limits: convert from config (deg or rad) to radians
         joint_limits = None
-        if getattr(self.path_config, "joint_limits_relative", None):
+        joint_limits_cfg = ik_cfg.get("joint_limits_relative", [])
+        if joint_limits_cfg:
             jl = []
-            for lo, hi in self.path_config.joint_limits_relative:
-                lo_f = float(lo)
-                hi_f = float(hi)
+            for limits in joint_limits_cfg:
+                lo_f = float(limits[0])
+                hi_f = float(limits[1])
                 # If values look like degrees (>|pi|), convert
-                if abs(lo_f) > np.pi or abs(hi_f) > np.pi:
-                    lo_f = np.deg2rad(lo_f)
-                    hi_f = np.deg2rad(hi_f)
+                if abs(lo_f) > math.pi or abs(hi_f) > math.pi:
+                    lo_f = math.radians(lo_f)
+                    hi_f = math.radians(hi_f)
                 jl.append((lo_f, hi_f))
             joint_limits = jl
 
+        # Get max joint velocities from controller config (rad/iter for IRL, we use rad/step)
+        max_joint_velocities = ctrl_cfg.get("per_joint_max_velocity", None)
+
         diff_ik_cfg = DifferentialIKControllerCfg(
-            command_type=self.path_config.ik_command_type,
-            use_relative_mode=self.path_config.ik_use_relative_mode,
-            ik_method=self.path_config.ik_method,
-            ik_params=self.path_config.ik_params,
-            ignore_axes=list(self.path_config.ignore_axes),
-            use_reduced_jacobian=self.path_config.use_reduced_jacobian,
+            command_type=ik_cfg.get("command_type", "pose"),
+            use_relative_mode=ik_cfg.get("use_relative_mode", True),
+            ik_method=ik_cfg.get("method", "dls"),
+            ik_params=ik_cfg.get("params", {}),
+            ignore_axes=list(ik_cfg.get("ignore_axes", ["roll", "yaw"])),
+            use_reduced_jacobian=ik_cfg.get("use_reduced_jacobian", True),
             joint_limits=joint_limits,
-            velocity_mode=bool(self.path_config.ik_velocity_mode),
-            velocity_error_gain=float(self.path_config.ik_velocity_error_gain),
-            use_rotational_velocity=bool(self.path_config.ik_use_rotational_velocity),
+            velocity_mode=bool(ik_cfg.get("velocity_mode", True)),
+            velocity_error_gain=float(ik_cfg.get("velocity_error_gain", 200.0)),
+            use_rotational_velocity=bool(ik_cfg.get("use_rotational_velocity", True)),
+            enable_velocity_limiting=ctrl_cfg.get("enable_velocity_limiting", True),
+            max_joint_velocities=max_joint_velocities,
+            enable_adaptive_damping=ik_cfg.get("enable_adaptive_damping", True),
         )
 
         self.diff_ik_controller = DifferentialIKController(
@@ -489,8 +551,8 @@ class PathPlanningEnvironment:
         
         # Use wall configuration from environment config (matches hardware exactly)
         size = list(env_config.wall_size)
-        pos = np.array(env_config.wall_pos)
-        quat_array = np.array(env_config.wall_rot)  # [w, x, y, z]
+        pos = list(env_config.wall_pos)
+        quat_array = list(env_config.wall_rot)  # [w, x, y, z]
 
         # No environment origin offset (hardware has single world frame, num_envs=1)
 
@@ -522,9 +584,9 @@ class PathPlanningEnvironment:
         wall = RigidObject(wall_cfg)
         self.obstacles.append(wall)
         self.obstacle_data.append({
-            "size": np.array(size),
-            "pos": np.array(pos),
-            "rot": np.array([float(quat[0]), float(quat[1]), float(quat[2]), float(quat[3])]),
+            "size": list(size),
+            "pos": list(pos),
+            "rot": [float(q) for q in quat_array],
         })
         self.obstacle_count += 1
 
@@ -544,9 +606,9 @@ class PathPlanningEnvironment:
         self.final_target_pos[:] = torch.tensor(target_pos, device=self.sim.device)
 
         # Convert Euler angles to quaternion
-        roll_rad = torch.tensor([target_rot[0] * np.pi / 180.0], device=self.sim.device)
-        pitch_rad = torch.tensor([target_rot[1] * np.pi / 180.0], device=self.sim.device)
-        yaw_rad = torch.tensor([target_rot[2] * np.pi / 180.0], device=self.sim.device)
+        roll_rad = torch.tensor([math.radians(target_rot[0])], device=self.sim.device)
+        pitch_rad = torch.tensor([math.radians(target_rot[1])], device=self.sim.device)
+        yaw_rad = torch.tensor([math.radians(target_rot[2])], device=self.sim.device)
 
         self.final_target_quat[:] = quat_from_euler_xyz(roll_rad, pitch_rad, yaw_rad).repeat(self.scene.num_envs, 1)
 
@@ -563,36 +625,6 @@ class PathPlanningEnvironment:
         self.current_waypoint_quat[:] = current_quat_b
 
         logger.info(f"Target set to position: {target_pos}, rotation: {target_rot}")
-
-    #def spawn_simple_target(self) -> Tuple[Tuple[float, float, float], Tuple[float, float, float]]:
-        """
-        Alternately spawns a fixed target point on either side (left/right) of the wall.
-        Wall is assumed to be centered at (0.5, 0.0, 0.1), rotated 90° about Z.
-
-        Returns:
-            Tuple of (target_pos, target_rot)
-        """
-        # Fixed height above ground
-        #z_pos = -0.05  # slightly above center of the wall
-
-        # X stays constant (aligned with wall center)
-        #x_pos = 0.5
-
-        # Y is alternated each time
-        #y_offset = 0.3  #
-
-        #if not hasattr(self, "_last_target_side") or self._last_target_side == "right":
-        #    self._last_target_side = "left"
-        #    target_pos = (x_pos, y_offset, z_pos) # (0.5, 0.3, -0.05)
-        #else:
-        #    self._last_target_side = "right"
-        #    target_pos = (x_pos + 0.1, -y_offset, z_pos) # (0.6, -0.3, -0.05)
-
-        # Random flat yaw
-        #target_rot = (0.0, 0.0, np.random.uniform(-90.0, 90.0))
-
-        #print(f"[spawn_target] Target: pos={target_pos}, rot={target_rot}")
-        #return target_pos, target_rot
 
     
     def generate_trajectory(self, target_pos: Tuple[float, float, float],
@@ -634,19 +666,6 @@ class PathPlanningEnvironment:
             if algorithm == "a_star":
                 algorithm_name = "A*"
                 astar_params = AStarParams()
-
-                # DEBUG: Show how grid snapping would look, but feed raw
-                # world positions into the planner (A* snaps internally).
-                if self.debug_trajectory or args_cli.debug:
-                    snapped_start = snap_to_grid(current_pos_w, self.path_config.grid_resolution)
-                    snapped_goal = snap_to_grid(target_pos_w, self.path_config.grid_resolution)
-                    print(f"\n[DEBUG A*] Grid Snapping (resolution={self.path_config.grid_resolution}m):")
-                    print(f"  Start before snap: {current_pos_w}")
-                    print(f"  Start after snap:  {snapped_start}")
-                    print(f"  Start snap delta:  {(np.array(snapped_start) - current_pos_w)*1000} mm")
-                    print(f"  Goal before snap:  {target_pos_w}")
-                    print(f"  Goal after snap:   {snapped_goal}")
-                    print(f"  Goal snap delta:   {(np.array(snapped_goal) - target_pos_w)*1000} mm")
 
                 # Plan from current EE pose to target; A* will handle its own
                 # grid snapping internally inside the planner.
@@ -707,35 +726,78 @@ class PathPlanningEnvironment:
             elif algorithm == "a_star_plane":
                 algorithm_name = "A* Plane"
                 astar_plane_params = AStarParams()
-                result = create_astar_plane_trajectory_normalized(
-                    start_pos=tuple(current_pos_w),
-                    goal_pos=tuple(target_pos_w),
+                result = plan_to_target(
+                    start_pos_world=tuple(current_pos_w),
+                    target_pos_world=tuple(target_pos_w),
                     obstacle_data=self.obstacle_data,
+                    algorithm="a_star_plane",
                     grid_resolution=self.path_config.grid_resolution,
                     safety_margin=self.path_config.safety_margin,
-                    astar_params=astar_plane_params,
                     normalizer_params=normalizer,
+                    astar_params=astar_plane_params,
                     verbose=True,  # Print planar A* iteration progress (every 5k)
+                )
+            elif algorithm == "rrt_plane":
+                algorithm_name = "RRT Plane"
+                rrt_params = RRTParams(max_acceptable_cost=0.768)
+                result = plan_to_target(
+                    start_pos_world=tuple(current_pos_w),
+                    target_pos_world=tuple(target_pos_w),
+                    obstacle_data=self.obstacle_data,
+                    algorithm="rrt_plane",
+                    grid_resolution=self.path_config.grid_resolution,
+                    safety_margin=self.path_config.safety_margin,
+                    normalizer_params=normalizer,
+                    rrt_params=rrt_params,
+                )
+            elif algorithm == "rrt_star_plane":
+                algorithm_name = "RRT* Plane"
+                rrt_star_params = RRTStarParams(max_acceptable_cost=0.768)
+                result = plan_to_target(
+                    start_pos_world=tuple(current_pos_w),
+                    target_pos_world=tuple(target_pos_w),
+                    obstacle_data=self.obstacle_data,
+                    algorithm="rrt_star_plane",
+                    grid_resolution=self.path_config.grid_resolution,
+                    safety_margin=self.path_config.safety_margin,
+                    normalizer_params=normalizer,
+                    rrt_star_params=rrt_star_params,
+                )
+            elif algorithm == "prm_plane":
+                algorithm_name = "PRM Plane"
+                prm_params = PRMParams()
+                result = plan_to_target(
+                    start_pos_world=tuple(current_pos_w),
+                    target_pos_world=tuple(target_pos_w),
+                    obstacle_data=self.obstacle_data,
+                    algorithm="prm_plane",
+                    grid_resolution=self.path_config.grid_resolution,
+                    safety_margin=self.path_config.safety_margin,
+                    normalizer_params=normalizer,
+                    prm_params=prm_params,
                 )
 
             # Extract trajectory data from standardized result
-            exec_poses_world = result["exec_poses"]  # [K, 7] NumPy array: xyz + quat(w,x,y,z)
+            exec_poses_world = self._as_device_tensor(result["exec_poses"])  # [K, 7]: xyz + quat(w,x,y,z)
+            target_pos_w_t = self._as_device_tensor(target_pos_w)
 
             # Check if we need to append final target (only if path doesn't end close enough)
-            last_waypoint_to_target_dist = np.linalg.norm(exec_poses_world[-1][:3] - target_pos_w)
+            last_waypoint_to_target_dist = torch.norm(exec_poses_world[-1, :3] - target_pos_w_t).item()
             min_append_threshold = self.path_config.speed_mps * self.path_config.dt * 0.5  # Half a timestep
 
             if last_waypoint_to_target_dist > min_append_threshold:
                 # Append exact final target to ensure smooth arrival
                 # (path planners may not end exactly at target due to grid snapping)
                 # Since we use pitch=0, we can just use identity quaternion [1,0,0,0]
-                final_target_pose_world = np.concatenate([target_pos_w, [1, 0, 0, 0]]).astype(np.float32)
-                exec_poses_world = np.vstack([exec_poses_world, final_target_pose_world])
+                final_target_pose_world = torch.cat(
+                    [target_pos_w_t, torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.sim.device)]
+                ).unsqueeze(0)
+                exec_poses_world = torch.cat([exec_poses_world, final_target_pose_world], dim=0)
                 logger.info(f"[{algorithm_name}] Appended final target ({last_waypoint_to_target_dist*1000:.2f}mm gap)")
             else:
                 logger.info(f"[{algorithm_name}] Path already ends at target ({last_waypoint_to_target_dist*1000:.2f}mm)")
 
-            self.trajectory_waypoints = len(exec_poses_world)  # Execution waypoints
+            self.trajectory_waypoints = exec_poses_world.shape[0]  # Execution waypoints
 
             # Calculate timing for user-configurable speed
             self.total_distance_planned = float(result["total_length_m"][0])
@@ -754,8 +816,8 @@ class PathPlanningEnvironment:
             trajectory = []
             for i, pose_w in enumerate(exec_poses_world):
                 # Extract position and quaternion (world frame)
-                pos_w = torch.tensor(pose_w[:3], device=self.sim.device).unsqueeze(0)
-                quat_w = torch.tensor(pose_w[3:7], device=self.sim.device).unsqueeze(0)
+                pos_w = pose_w[:3].unsqueeze(0)
+                quat_w = pose_w[3:7].unsqueeze(0)
 
                 # Convert to base frame
                 pos_b, quat_b = subtract_frame_transforms(
@@ -776,11 +838,6 @@ class PathPlanningEnvironment:
             self.calculation_time = time.time() - calc_start_time
             logger.info(f"{algorithm_name} calculation time: {self.calculation_time:.3f}s")
             logger.debug(f"Average point spacing: {self.total_distance_planned/(len(exec_poses_world)-1):.4f}m")
-
-            # DEBUG: Analyze trajectory start/end points
-            if self.debug_trajectory or args_cli.debug:
-                # TODO: this
-                pass
 
         except CollisionError as e:
             print(f"[ERROR] {algorithm_name} planning failed: Start or goal position is in collision")
@@ -847,9 +904,9 @@ class PathPlanningEnvironment:
         # Print clear error status (matching IRL format)
         pos_error_vec_mm = pos_error_vec[0].cpu().numpy() * 1000.0
         pos_error_mm = pos_error * 1000.0
-        rot_error_deg = rot_error_y * 180.0 / np.pi
+        rot_error_deg = rot_error_y * 180.0 / math.pi
         pos_tol_mm = pos_tol * 1000.0
-        rot_tol_deg = rot_tol * 180.0 / np.pi
+        rot_tol_deg = rot_tol * 180.0 / math.pi
 
         goal_reached = pos_error < pos_tol and rot_error_y < rot_tol
 
@@ -916,7 +973,7 @@ class PathPlanningEnvironment:
             self.current_waypoint_quat[:] = current_step_pose[3:7].unsqueeze(0)  # [1, 4]
 
             if not hasattr(self, '_execution_complete_logged'):
-                logger.info("Path execution completed")
+                print(f"[Progress] 100.0% - At target, waiting for settle...")
                 self._execution_complete_logged = True
         elif target_index < len(self.interpolated_trajectory):
             # Get current waypoint from trajectory
@@ -927,21 +984,6 @@ class PathPlanningEnvironment:
                 current_step_pose = current_step_pose[0]  # [7]
             elif current_step_pose.dim() == 3:  # [1, 1, 7] - shouldn't happen but handle it
                 current_step_pose = current_step_pose[0, 0]  # [7]
-
-            # DEBUG: Log waypoint changes (helps identify sudden jumps)
-            if self.debug_trajectory and not hasattr(self, '_last_logged_waypoint_idx'):
-                self._last_logged_waypoint_idx = -1
-
-            if self.debug_trajectory and target_index != self._last_logged_waypoint_idx:
-                old_pos = self.current_waypoint_pos[0].cpu().numpy()
-                new_pos = current_step_pose[:3].cpu().numpy()
-                waypoint_jump = np.linalg.norm(new_pos - old_pos)
-                if waypoint_jump > 0.01:  # 10mm threshold
-                    print(f"\n[DEBUG TRAJECTORY] Waypoint {self._last_logged_waypoint_idx} → {target_index}")
-                    print(f"  Old waypoint: {old_pos}")
-                    print(f"  New waypoint: {new_pos}")
-                    print(f"  Waypoint jump: {waypoint_jump*1000:.2f}mm")
-                self._last_logged_waypoint_idx = target_index
 
             # Set current waypoint - robot tries its best to follow
             self.current_waypoint_pos[:] = current_step_pose[:3].unsqueeze(0)  # [1, 3]
@@ -971,8 +1013,8 @@ class PathPlanningEnvironment:
                     # Present errors in human-friendly units
                     pos_err_mm = pos_err * 1000.0
                     pos_tol_mm = float(self.path_config.final_target_tolerance) * 1000.0
-                    rot_err_deg = float(rot_err_y) * 180.0 / np.pi
-                    rot_tol_deg = float(self.path_config.orientation_tolerance) * 180.0 / np.pi
+                    rot_err_deg = float(rot_err_y) * 180.0 / math.pi
+                    rot_tol_deg = float(self.path_config.orientation_tolerance) * 180.0 / math.pi
 
                     # Use print instead of logger for this status message - it should always show
                     print(
@@ -982,62 +1024,22 @@ class PathPlanningEnvironment:
                     )
 
                     # Extra debug: show where target, marker, and EE are
-                    if self.debug_pose_logging:
-                        current_pos_w = ee_pose_w[0, 0:3].detach().cpu().numpy()
-                        print(f"[DEBUG] EE_w={current_pos_w}")
-                        # Waypoint in base frame
-                        wp_b = self.current_waypoint_pos[0].detach().cpu().numpy()
-                        ee_b = ee_pos_b[0].detach().cpu().numpy()
-                        dpos_b = float(np.linalg.norm(wp_b - ee_b))
-
-                        # Final target in base frame and its error (Y-only rot)
-                        tgt_b = self.final_target_pos[0].detach().cpu().numpy()
-                        pos_err_tgt = float(np.linalg.norm(tgt_b - ee_b))
-                        _, rot_err_axis_tgt = compute_pose_error(
-                            ee_pos_b, ee_quat_b, self.final_target_pos, self.final_target_quat, rot_error_type="axis_angle"
-                        )
-                        rot_err_y_tgt = float(torch.abs(rot_err_axis_tgt[:, 1]).item())
-
-                        # Waypoint marker in world frame vs EE world frame
-                        wp_w_pos, wp_w_quat = combine_frame_transforms(
-                            root_pose_w[:, 0:3], root_pose_w[:, 3:7],
-                            self.current_waypoint_pos, self.current_waypoint_quat
-                        )
-                        wp_w = wp_w_pos[0].detach().cpu().numpy()
-                        ee_w = ee_pose_w[0, 0:3].detach().cpu().numpy()
-                        dpos_w = float(np.linalg.norm(wp_w - ee_w))
-
-                        # Log which body we use for EE
-                        try:
-                            ee_body_id = int(self.robot_entity_cfg.body_ids[0])
-                            ee_body_name = str(self.robot.data.body_names[ee_body_id]) if hasattr(self.robot.data, 'body_names') else str(ee_body_id)
-                        except Exception:
-                            ee_body_id = int(self.robot_entity_cfg.body_ids[0])
-                            ee_body_name = str(ee_body_id)
-
-                        print(
-                            f"[DEBUG Base] EE={ee_b}, WP={wp_b}, dpos={dpos_b:.4f}m | Target={tgt_b}, dpos_tgt={pos_err_tgt:.4f}m, errY_tgt={rot_err_y_tgt:.3f}rad"
-                        )
-                        print(
-                            f"[DEBUG World] EE_w={ee_w}, Marker_w={wp_w}, dpos_w={dpos_w:.4f}m | EE body id={ee_body_id} name={ee_body_name}"
-                        )
                     self._last_progress_print = time.time()
 
-        # Visualize targets without rotating them by the base heading (match IRL view)
-        root_pose_w = self.robot.data.root_state_w[:, 0:7]
-        root_pos_w = root_pose_w[:, 0:3]
+        # Visualize targets (skip in headless - no viewport)
+        if not self.headless:
+            root_pose_w = self.robot.data.root_state_w[:, 0:7]
+            root_pos_w = root_pose_w[:, 0:3]
 
-        # Place markers using root translation only (no yaw-based rotation) and show orientations in world frame
-        waypoint_pos_w = root_pos_w + self.current_waypoint_pos
-        final_pos_w = root_pos_w + self.final_target_pos
+            waypoint_pos_w = root_pos_w + self.current_waypoint_pos
+            final_pos_w = root_pos_w + self.final_target_pos
 
-        # Orientations: use identity unless an explicit world-frame orientation is provided
-        ident = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.sim.device).unsqueeze(0)
-        wp_quat_w = self.current_waypoint_quat if self.current_waypoint_quat is not None else ident
-        final_quat_w = self.final_target_quat if self.final_target_quat is not None else ident
+            ident = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.sim.device).unsqueeze(0)
+            wp_quat_w = self.current_waypoint_quat if self.current_waypoint_quat is not None else ident
+            final_quat_w = self.final_target_quat if self.final_target_quat is not None else ident
 
-        self.goal_marker.visualize(waypoint_pos_w, wp_quat_w)
-        self.final_target_marker.visualize(final_pos_w, final_quat_w)
+            self.goal_marker.visualize(waypoint_pos_w, wp_quat_w)
+            self.final_target_marker.visualize(final_pos_w, final_quat_w)
 
         
     def step(self):
@@ -1078,14 +1080,6 @@ class PathPlanningEnvironment:
         # Prepare IK command based on mode (relative vs absolute)
         use_relative = getattr(self.diff_ik_controller.cfg, "use_relative_mode", False)
 
-        # DEBUG: Log IK inputs
-        if self.debug_ik:
-            print(f"\n[DEBUG IK] Step input:")
-            print(f"  Current EE pos:     {ee_pos_b[0].cpu().numpy()}")
-            print(f"  Target waypoint:    {self.current_waypoint_pos[0].cpu().numpy()}")
-            print(f"  Position error:     {(self.current_waypoint_pos - ee_pos_b)[0].cpu().numpy()}")
-            print(f"  Mode: {'RELATIVE' if use_relative else 'ABSOLUTE'}")
-
         if use_relative:
             # RELATIVE MODE: Send position and rotation deltas
             pos_error = self.current_waypoint_pos - ee_pos_b
@@ -1110,41 +1104,32 @@ class PathPlanningEnvironment:
                 ee_pos_b, ee_quat_b, self.current_waypoint_pos, waypoint_quat_local, rot_error_type="axis_angle"
             )
 
-            # Apply relative-mode gains (IK controller handles all limits internally)
-            pos_error = float(self.path_config.relative_pos_gain) * pos_error
-            rot_error_axis = float(self.path_config.relative_rot_gain) * rot_error_axis
+            # Apply relative-mode gains from control_config.yaml
+            pos_error = float(self.ik_config.get('relative_pos_gain', 1.0)) * pos_error
+            rot_error_axis = float(self.ik_config.get('relative_rot_gain', 1.0)) * rot_error_axis
 
             # Command is [dx, dy, dz, droll, dpitch, dyaw] (6 elements)
             command = torch.cat([pos_error, rot_error_axis], dim=-1)
 
-            # DEBUG: Log relative command
-            if self.debug_ik:
-                print(f"  Relative command:   {command[0].cpu().numpy()}")
-                print(f"    Pos delta (mm):   {(pos_error[0]*1000).cpu().numpy()}")
-                print(f"    Rot delta (deg):  {(rot_error_axis[0]*180/np.pi).cpu().numpy()}")
         else:
             # ABSOLUTE MODE: Send target pose directly
             # Command is [x, y, z, qw, qx, qy, qz] (7 elements)
             # Waypoint orientation is already in base frame; keep it (no extra world rotation)
             command = torch.cat([self.current_waypoint_pos, self.current_waypoint_quat], dim=-1)
 
-            # DEBUG: Log absolute command
-            if self.debug_ik:
-                print(f"  Absolute command:   {command[0].cpu().numpy()}")
-
         # Send command to IK controller
         self.diff_ik_controller.set_command(command, ee_pos=ee_pos_b, ee_quat=ee_quat_b)
 
         # Optional desired EE velocity for velocity_mode (use simulated measurements)
         desired_ee_velocity = None
-        if getattr(self.path_config, "ik_velocity_mode", False):
+        if self.ik_config.get("velocity_mode", False):
             # EE twist from PhysX body state (world frame) -> base frame
             lin_vel_w = self.robot.data.body_lin_vel_w[:, self.robot_entity_cfg.body_ids[0], :]
             ang_vel_w = self.robot.data.body_ang_vel_w[:, self.robot_entity_cfg.body_ids[0], :]
             lin_vel_b = torch.bmm(base_rot_matrix, lin_vel_w.unsqueeze(-1)).squeeze(-1)
             ang_vel_b = torch.bmm(base_rot_matrix, ang_vel_w.unsqueeze(-1)).squeeze(-1)
 
-            if not getattr(self.path_config, "ik_use_rotational_velocity", True):
+            if not self.ik_config.get("use_rotational_velocity", True):
                 ang_vel_b = torch.zeros_like(ang_vel_b)
 
             desired_ee_velocity = torch.cat([lin_vel_b, ang_vel_b], dim=1)
@@ -1156,58 +1141,39 @@ class PathPlanningEnvironment:
             jacobian,
             joint_pos,
             desired_ee_velocity=desired_ee_velocity,
-            dt=float(self.path_config.dt),
+            dt=float(self.sim.get_physics_dt()),
         )
-
-        # DEBUG: Log joint commands
-        if self.debug_ik:
-            joint_delta = (joint_pos_des - joint_pos)[0].cpu().numpy()
-            print(f"  Joint positions (current): {joint_pos[0].cpu().numpy()}")
-            print(f"  Joint positions (desired): {joint_pos_des[0].cpu().numpy()}")
-            print(f"  Joint delta (rad):         {joint_delta}")
-            print(f"  Joint delta (deg):         {joint_delta * 180/np.pi}")
 
         self.robot.set_joint_position_target(joint_pos_des, joint_ids=self.robot_entity_cfg.joint_ids)
         self.scene.write_data_to_sim()
 
-        # Visualize current EE position
-        self.ee_marker.visualize(ee_pose_w[:, 0:3], ee_pose_w[:, 3:7])
+        # Visualize markers (skip in headless - no viewport)
+        if not self.headless:
+            self.ee_marker.visualize(ee_pose_w[:, 0:3], ee_pose_w[:, 3:7])
 
-        # Visualize relative pull target (only in relative mode)
-        if use_relative and SHOW_RELATIVE_PULL_MARKER:
-            # pull target in base frame is ee_pos_b + pos_error (after gains and clamp)
-            # Apply position scaling to exaggerate the pull target for visibility
-            pull_pos_b = ee_pos_b + (RELATIVE_PULL_MARKER_POSITION_SCALE * pos_error)
-            pull_quat_b = ee_quat_b  # orientation visualization not critical here
-            pull_pos_w, pull_quat_w = combine_frame_transforms(
-                root_pose_w[:, 0:3], root_pose_w[:, 3:7],
-                pull_pos_b, pull_quat_b
-            )
-            self.rel_pull_marker.visualize(pull_pos_w, pull_quat_w)
+            if use_relative and SHOW_RELATIVE_PULL_MARKER:
+                pull_pos_b = ee_pos_b + (RELATIVE_PULL_MARKER_POSITION_SCALE * pos_error)
+                pull_quat_b = ee_quat_b
+                pull_pos_w, pull_quat_w = combine_frame_transforms(
+                    root_pose_w[:, 0:3], root_pose_w[:, 3:7],
+                    pull_pos_b, pull_quat_b
+                )
+                self.rel_pull_marker.visualize(pull_pos_w, pull_quat_w)
 
 
-def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
+def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene, simulation_app) -> None:
     """Main simulation loop with clean A* path planning."""
     # Create clean environment
-    env = PathPlanningEnvironment(sim, scene)
+    enable_logging = args_cli.log
+    env = PathPlanningEnvironment(sim, scene, enable_logging=enable_logging, headless=args_cli.headless)
 
     # Initialize logging
     algorithm_logging_name = args_cli.algorithm.replace("_", "")
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    env.init_logging(algorithm_logging_name, os.path.join(script_dir, "logs_sim"))
-    
-    if args_cli.algorithm == "a_star":
-        algorithm_name = "A*"
-    elif args_cli.algorithm == "rrt":
-        algorithm_name = "RRT"
-    elif args_cli.algorithm == "rrt_star":
-        algorithm_name = "RRT*"
-    elif args_cli.algorithm == "prm":
-        algorithm_name = "PRM"
-    elif args_cli.algorithm == "a_star_plane":
-        algorithm_name = "A* Plane"
-    else:
-        algorithm_name = "Unknown"
+    if enable_logging:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        env.init_logging(algorithm_logging_name, os.path.join(script_dir, "logs_sim"))
+
+    algorithm_name = ALGORITHM_LABELS.get(args_cli.algorithm, "Unknown")
         
     # Initialize robot
     joint_pos = env.robot.data.default_joint_pos.clone()
@@ -1229,11 +1195,8 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
 
     # State management for target reaching
     current_target = None
-    goal_reached_counter = 0
-    wait_at_goal_steps = 50
-    trajectory_viz_freq = 10
-    count = 0
-
+    goal_reached_time = None
+    wait_at_goal_seconds = 5.0  # 5s wallclock settling, matches HW
     # Use environment configuration for targets (matches real hardware)
     env_config = DEFAULT_ENV_CONFIG
     # Start at point A first (blind move to staging pose), then alternate to B
@@ -1280,22 +1243,66 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
         input()
         return
 
-    while simulation_app.is_running():
-        env.step()
-        sim.step()
-        scene.update(sim.get_physics_dt())
-        count += 1
+    # Throttle headless mode to real-time update rate for comparability with IRL logs
+    if args_cli.headless:
+        target_dt = 1.0 / float(DEFAULT_CONFIG.update_frequency)
+        next_tick = time.time()
 
-        # Update trajectory visualization periodically
-        # if count % trajectory_viz_freq == 0:
-        #     env.visualize_trajectory()
+    # Timing instrumentation
+    loop_count = 0
+    t_env = 0.0
+    t_sim = 0.0
+    t_scene = 0.0
+    timing_report_interval = 5.0  # Print Hz report every N seconds
+    timing_report_wallclock = time.time()
+
+    while simulation_app.is_running():
+        t0 = time.time()
+        env.step()
+        t1 = time.time()
+        sim.step(render=not args_cli.headless)
+        t2 = time.time()
+        scene.update(sim.get_physics_dt())
+        t3 = time.time()
+
+        t_env += t1 - t0
+        t_sim += t2 - t1
+        t_scene += t3 - t2
+        loop_count += 1
+
+        # Print timing report periodically
+        now = time.time()
+        wall_elapsed = now - timing_report_wallclock
+        if wall_elapsed >= timing_report_interval and loop_count > 0:
+            actual_hz = loop_count / wall_elapsed
+            t_compute = t_env + t_sim + t_scene
+            max_hz = loop_count / t_compute if t_compute > 0 else 0
+            avg_ms = t_compute / loop_count * 1000
+            env_pct = t_env / t_compute * 100 if t_compute > 0 else 0
+            sim_pct = t_sim / t_compute * 100 if t_compute > 0 else 0
+            scene_pct = t_scene / t_compute * 100 if t_compute > 0 else 0
+            print(
+                f"[Timing] {actual_hz:.1f} Hz actual (max {max_hz:.0f} Hz, {avg_ms:.1f}ms/step) | "
+                f"env={env_pct:.0f}%, sim={sim_pct:.0f}%, scene={scene_pct:.0f}%"
+            )
+            loop_count = 0
+            t_env = t_sim = t_scene = 0.0
+            timing_report_wallclock = now
+
+        if args_cli.headless:
+            next_tick += target_dt
+            sleep_s = next_tick - time.time()
+            if sleep_s > 0:
+                time.sleep(sleep_s)
+            else:
+                # If we're behind, reset to avoid runaway drift
+                next_tick = time.time()
 
         # Check if goal is reached
         if current_target is not None and env.is_goal_reached():
-            goal_reached_counter += 1
-
-            if goal_reached_counter == 1:  # First time reaching goal
-                logger.info(f"Goal reached! Waiting for {wait_at_goal_steps} steps...")
+            if goal_reached_time is None:  # First time reaching goal
+                goal_reached_time = time.time()
+                print(f"[Goal] At target! Settling for {wait_at_goal_seconds:.0f}s...")
 
                 # Pause for inspection if requested
                 if args_cli.pause_on_goal:
@@ -1304,20 +1311,28 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
                     print("         Press Enter to continue...")
                     print("="*60)
                     input()
+                    goal_reached_time = time.time()  # Reset after pause
 
-            # Wait at goal for specified steps
-            if goal_reached_counter >= wait_at_goal_steps:
-                logger.info("Settling complete. Saving trajectory log...")
+            # Wait at goal for wallclock duration
+            if (time.time() - goal_reached_time) >= wait_at_goal_seconds:
+                # Compute total execution time (incl. settle, excl. planning) - matches IRL
+                total_exec_time = time.time() - env.execution_start_time - env.calculation_time
+                print(
+                    f"[Goal] Path complete! "
+                    f"Planned: {env.trajectory_total_time:.2f}s, "
+                    f"Executed: {total_exec_time:.2f}s "
+                    f"(incl. {wait_at_goal_seconds:.0f}s settle)"
+                )
 
                 # Skip logging the first trajectory (blind move to Point A, matches hardware)
                 if is_first_trajectory:
-                    logger.info("First trajectory (blind move) - not logged (matches hardware)")
+                    print("[Goal] First trajectory (blind move) - not logged (matches hardware)")
                     is_first_trajectory = False
                 else:
                     # Save log AFTER settling period (matches hardware behavior)
                     env.save_trajectory_log(algorithm_logging_name)
 
-                logger.info("Alternating target...")
+                print("[Goal] Alternating target...")
 
                 try:
                     # Alternate to next target
@@ -1328,7 +1343,7 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
                     logger.info(f"Using {algorithm_name} path planning")
                     env.generate_trajectory(target_pos, target_rot)
                     current_target = (target_pos, target_rot)
-                    goal_reached_counter = 0
+                    goal_reached_time = None
 
                 except CollisionError as e:
                     print(f"\n" + "="*60)
@@ -1337,7 +1352,7 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
                     print("="*60)
                     print("[PAUSED] Path planning failed. Press Enter to continue or Ctrl+C to exit...")
                     input()
-                    goal_reached_counter = 0
+                    goal_reached_time = None
                 except NoPathFoundError as e:
                     print(f"\n" + "="*60)
                     print(f"[ERROR] Failed to plan to next target: No path exists")
@@ -1345,27 +1360,29 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
                     print("="*60)
                     print("[PAUSED] Path planning failed. Press Enter to continue or Ctrl+C to exit...")
                     input()
-                    goal_reached_counter = 0
+                    goal_reached_time = None
                 except PathPlanningError as e:
                     print(f"\n" + "="*60)
                     print(f"[ERROR] Failed to find new safe target: {e}")
                     print("="*60)
                     print("[PAUSED] Path planning failed. Press Enter to continue or Ctrl+C to exit...")
                     input()
-                    goal_reached_counter = 0
+                    goal_reached_time = None
         else:
-            # Reset counter if we're not at goal
-            goal_reached_counter = 0
+            # Reset timer if we leave the goal region
+            goal_reached_time = None
 
 
 def main():
     """Main function."""
     # Load kit helper
     # Use update frequency from config for simulation dt
-    sim_cfg = sim_utils.SimulationCfg(dt=(1/DEFAULT_CONFIG.update_frequency), render_interval=1, device=args_cli.device)
+    sim_dt = 1/(DEFAULT_CONFIG.update_frequency)
+    sim_cfg = sim_utils.SimulationCfg(dt=sim_dt, render_interval=1, device=args_cli.device)
     sim = sim_utils.SimulationContext(sim_cfg)
 
     # Set main camera
+
     sim.set_camera_view([0.5, 2.0, 0.5], [0.2, 0.0, 0.0])
 
     # Design scene
@@ -1378,11 +1395,10 @@ def main():
     print("[INFO]: setup complete...")
 
     # Run the simulator
-    run_simulator(sim, scene)
+    run_simulator(sim, scene, simulation_app)
+    simulation_app.close()
 
 
 if __name__ == "__main__":
     # Run the main function
     main()
-    # Close sim app
-    simulation_app.close()
