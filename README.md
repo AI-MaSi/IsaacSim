@@ -2,6 +2,7 @@
 ## IsaacSim Models
 Contains variety of .usd model files for the project.
 ## IsaacLab
+(prob deprecated, demos made for isaaclab 4.5.0 haha. We'll update at some point...)
 Contains test environments for IsaacLab.
 
 
